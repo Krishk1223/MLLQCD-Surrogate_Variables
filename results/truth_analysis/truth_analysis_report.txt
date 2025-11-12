@@ -1,0 +1,45 @@
+============================================================
+2PT CORRELATOR TRUTH ANALYSIS REPORT
+============================================================
+Analysis of 6 ensembles
+
+2pt_K_fine_qsq0:
+  Configurations: 2208
+  Time slices: 95
+  Mean correlator range: -3.15e-09 to 5.83e-02
+  Statistical errors: 9.59e-10 to 3.99e-06
+
+2pt_K_fine_qsqmaxby3:
+  Configurations: 2204
+  Time slices: 95
+  Mean correlator range: -4.30e-09 to 6.09e-02
+  Statistical errors: 1.24e-09 to 4.91e-06
+
+2pt_D_nongold_fine:
+  Configurations: 2473
+  Time slices: 95
+  Mean correlator range: -9.35e-03 to 4.77e-02
+  Statistical errors: 7.83e-20 to 3.91e-06
+
+2pt_D_Gold_fine:
+  Configurations: 2211
+  Time slices: 95
+  Mean correlator range: 5.03e-20 to 4.88e-02
+  Statistical errors: 2.90e-20 to 1.97e-06
+
+2pt_K_fine_2qsqmaxby3:
+  Configurations: 2204
+  Time slices: 95
+  Mean correlator range: 1.87e-08 to 6.43e-02
+  Statistical errors: 1.70e-09 to 6.62e-06
+
+2pt_K_fine:
+  Configurations: 2373
+  Time slices: 95
+  Mean correlator range: 9.97e-07 to 6.94e-02
+  Statistical errors: 2.73e-09 to 9.76e-06
+
+Generated Plots:
+  log_correlator_*.png - Log correlator vs time
+  effective_mass_*.png - Effective mass vs time
+============================================================
