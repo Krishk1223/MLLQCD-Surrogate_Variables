@@ -1,0 +1,33 @@
+#Temporary YAML config for transformer
+model:
+  name: "transformer_model"
+  input_dim: 1
+  d_model: 128 
+  num_layers: 4
+  num_heads: 8 
+  max_seq_len: 96
+  positional_encoding: "sinusoidal"
+  dropout: 0.1
+  regression_head:
+    output_dim: 1
+    pooling: "mean"
+
+training:
+  batch_size: 64
+  shuffle: true
+  num_epochs: 50
+  optimizer: "adam"
+  learning_rate: 0.001
+  weight_decay: 1e-4
+  early_stopping: true
+
+logging:
+  log_interval: 50
+  save_model: true
+  save_path: "./outputs/model_checkpoints/"
+
+# scheduler:
+#   use_scheduler: true
+#   type: "ReduceLROnPlateau"
+#   patience: 5
+#   factor: 0.5
