@@ -1,0 +1,20 @@
+[project]
+name = "mllqcd"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "corrfitter>=8.2",
+    "gvar>=13.1.7",
+    "lsqfit>=13.3.1",
+    "matplotlib>=3.10.7",
+    "numpy>=2.3.4",
+    "pandas>=2.3.3",
+    "pathlib>=1.0.1",
+    "plotly>=6.3.1",
+    "scikit-learn>=1.7.2",
+    "seaborn>=0.13.2",
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
+]
