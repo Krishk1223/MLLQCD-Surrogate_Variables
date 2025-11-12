@@ -1,9 +1,11 @@
 import torch.nn as nn
 import torch.nn.functional as F
+import torch
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model, num_heads):
+    def __init__(self, d_model, num_heads, dropout=0.1):
         super().__init__()
+        self.dropout_rate = dropout
         self.d_model = d_model
         self.num_heads = num_heads
         self.head_dim = d_model // num_heads
@@ -19,8 +21,8 @@ class MultiHeadAttention(nn.Module):
 
     def compute_attention(self, query, key, value, mask=None):
         scores = torch.matmul(query, key.transpose(-2, -1)) / (self.head_dim ** 0.5)
-        if mask not None:
-            scores = scores.masked_fill(mask=0, float('-inf'))
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, float('-inf'))
         attention_weights = F.softmax(scores, dim=-1)
         return torch.matmul(attention_weights, value)
 
@@ -36,5 +38,6 @@ class MultiHeadAttention(nn.Module):
         value = self.split_heads(self.value_linear(value), batch_size)
 
         attention_weights = self.compute_attention(query, key, value, mask)
+        attention_weights = F.dropout(attention_weights, p=self.dropout_rate, training=self.training)
         attention_output = self.combine_heads(attention_weights, batch_size)
         return self.output_linear(attention_output)
