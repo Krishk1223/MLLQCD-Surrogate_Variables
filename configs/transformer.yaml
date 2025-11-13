@@ -5,8 +5,10 @@ model:
   d_model: 128 
   num_layers: 4
   num_heads: 8 
-  max_seq_len: 96
+  max_len: 96
   positional_encoding: "sinusoidal"
+  learnable_pos_encoding: false
+  d_ff: 512
   dropout: 0.1
   regression_head:
     output_dim: 1
@@ -16,18 +18,22 @@ training:
   batch_size: 64
   shuffle: true
   num_epochs: 50
-  optimizer: "adam"
+  patience: 10
+  optimiser: "adam"
   learning_rate: 0.001
   weight_decay: 1e-4
   early_stopping: true
+  loss_function: "MSELoss"
+  scheduler:
+    use_scheduler: false
+    type: "ReduceLROnPlateau"
+    patience: 5
+    factor: 0.5
+    mode: "min"
+    step_size: 10
+    gamma: 0.1
 
 logging:
   log_interval: 50
   save_model: true
-  save_path: "./outputs/model_checkpoints/"
-
-# scheduler:
-#   use_scheduler: true
-#   type: "ReduceLROnPlateau"
-#   patience: 5
-#   factor: 0.5
+  save_path: "results/model_checkpoints/transformer/"
