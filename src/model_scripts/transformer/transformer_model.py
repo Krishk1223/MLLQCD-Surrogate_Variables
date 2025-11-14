@@ -5,6 +5,8 @@ from .transformer_components.InputEmbedding import InputEmbedding
 from .transformer_components.PositionalEncoding import PositionalEncoding
 from .transformer_components.EncoderLayer import EncoderLayer
 from .transformer_components.RegressionHead import RegressionHead
+from src.dataset.transformer_dataset import TransformerDataset
+from src.dataloader.transformer_dataloader import TransformerDataLoader
 import yaml
 
 
@@ -115,11 +117,16 @@ class Transformer(BaseModel):
                     step_size = self.training_config['scheduler']['step_size'],
                     gamma = self.training_config['scheduler']['gamma']
                 )
-    
+
+        # Gradient clipping:
+        if self.training_config['gradient_clipping']['use_clipping']:
+            max_grad_norm = self.training_config['gradient_clipping']['max_norm']
+        else:
+            pass 
+
         #Training tracking variables:
         best_val_loss = float('inf')
         patience_counter = 0
-        
 
         self.is_trained = True
     
