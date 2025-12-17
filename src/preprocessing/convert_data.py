@@ -8,8 +8,24 @@ import multiprocessing
 import time
 import sys
 import numpy as np
+import argparse
+
+DEFAULTS = {
+    'header': False,
+    'large_buffer': True,
+    'enable_logging': False,
+    'zero_start': False,
+    'time_sources': 4
+}
+
+"""
+Preprocessing STEP 1: Convert raw gpl data files (before time source averaging) to CSVs.
+                      No time sources averaged in this step. Once this script is run, 
+                      run step 2 (sanity_check.py) to verify data integrity.
+"""
 
 def logging_setup(enable_logging=False, log_level=logging.INFO):
+    """Setup logging configuration."""
     if not enable_logging:
         logging.disable(logging.CRITICAL)
         return None
@@ -36,7 +52,7 @@ def logging_setup(enable_logging=False, log_level=logging.INFO):
     logger.info(f"Logging enabled. Saving log file to {log_file}")
     return logger
 
-def main(enable_logging=False):
+def convert_data(enable_logging=False, interactive=False):
 
     #Log setup:
     logger = logging_setup(enable_logging=enable_logging)
@@ -65,85 +81,115 @@ def main(enable_logging=False):
     project_root = script_dir.parent.parent
     download_path = project_root / "data"
     raw_path = os.path.join(download_path,"raw")
-    processed_path = os.path.join(download_path,"processed") 
+    processed_path = os.path.join(download_path,"processed", "unaveraged_data") 
 
     for path in [raw_path, processed_path]:
         if not os.path.exists(path):
             os.makedirs(path)
             log_info(f"Directory {path} created for data")
     
+
     #Data file checks:
     raw_files = os.listdir(raw_path)
     if raw_files == []:
         log_warning(f"No files found in {raw_path}. Please add relevant data files and rerun the script.")
-        askfile = input("Would you like to provide a filepath for a data file now? (y/n): ")
+        if interactive:
+            askfile = input("Would you like to provide a filepath for a data file now? (y/n): ")
         if askfile.lower() == "y" or askfile.lower() == "yes":
             try:
                 u_path = input("Please enter the full filepath for the data file which you would like to convert:")
                 file_ext = file_allowed(u_path)
                 if file_ext:
-                    header_present = ask_header()
-                    buffer_choice = ask_buffer()
-                    tau_index = ask_tau()
-                    data_to_csv_multithreaded(u_path, processed_path, file_ext, header=header_present, enable_logging=enable_logging, buffer=buffer_choice, zero_start=tau_index)
+                    header_present = ask_header(interactive=interactive)
+                    buffer_choice = ask_buffer(interactive=interactive)
+                    tau_index, time_sources = ask_tau(interactive=interactive)
+                    data_to_csv_multithreaded(u_path, processed_path, file_ext, header=header_present, enable_logging=enable_logging, buffer=buffer_choice, zero_start=tau_index, time_sources=time_sources)
                 else:
                     raise ValueError("File format not supported.")
             except Exception as e:
                 log_error(f"Error finding file {e}")
 
     else:
-        has_header = ask_header() #assume all files have same header status
-        buffer_choice = ask_buffer()
-        tau_index = ask_tau()
+        has_header = ask_header(interactive=interactive) #assume all files have same header status
+        buffer_choice = ask_buffer(interactive=interactive)
+        tau_index, time_sources = ask_tau(interactive=interactive)
         for file in raw_files:
             file_ext = os.path.splitext(file)[1]
             if not file_allowed(os.path.join(raw_path, file)):
-                log_error("File format not supported please use one of the following formats: .gpl, .txt")
-                try:
-                    user_path = input("Please enter the filepath for the data file which you would like to convert:")
-                    file_ext = file_allowed(user_path)
-                    if file_ext:
-                        data_to_csv_multithreaded(user_path, processed_path, file_ext, header=has_header, enable_logging=enable_logging, buffer=buffer_choice, zero_start=tau_index)
-                    else:
-                        raise ValueError("File format not supported.")
-                except Exception as e:
-                    log_error(f"Error finding file {e}")
+                log_error(f"File format not supported for {file}. Skipping.")
+                continue
             else:
                 input_file_path = os.path.join(raw_path, file)
                 log_info(f"Processing file: {input_file_path}")
-                data_to_csv_multithreaded(input_file_path, processed_path, file_ext, header=has_header, enable_logging=enable_logging, buffer=buffer_choice, zero_start=tau_index)
+                data_to_csv_multithreaded(input_file_path, processed_path, file_ext, header=has_header, enable_logging=enable_logging, buffer=buffer_choice, zero_start=tau_index, time_sources=time_sources)
 
-def ask_header():
-    while True:
-        response = input("Does the data file need a header row? (y/n): ")
-        if response.lower() == 'y' or response.lower() == 'yes':
-            return True
-        elif response.lower() == 'n' or response.lower() == 'no':
-            return False
-        else:
-            print("Invalid input. Please enter 'y' or 'n'.")
+def ask_header(interactive=False):
+    """Ask the user if the data file needs a header row."""
+    header = DEFAULTS["header"]
+    if interactive:
+        while True:
+            response = input("Does the data file need a header row (its advised to have a header with 0 indexed τ)? (y/n): ")
+            if response.lower() == 'y' or response.lower() == 'yes':
+                return True
+            elif response.lower() == 'n' or response.lower() == 'no' or response == '':
+                return False
+            else:
+                print("Invalid input. Please enter 'y' or 'n'.")
+    return header
 
-def ask_buffer():
-    while True:
-        buffer_request = input("Would you like to use a larger buffer size for processing? (y/n): ")
-        if buffer_request.lower() == 'y' or buffer_request.lower() == 'yes':
-            return True
-        elif buffer_request.lower() == 'n' or buffer_request.lower() == 'no':
-            return False
-        else:
-            print("Invalid input. Please enter 'y' or 'n'.")
+def ask_buffer(interactive=False):
+    """Ask the user if they want to use a larger buffer size for processing."""
+    if interactive:
+        while True:
+            buffer_request = input("Would you like to use a larger buffer size for processing? (y/n): ")
+            if buffer_request.lower() == 'y' or buffer_request.lower() == 'yes' or buffer_request == '':
+                return True
+            elif buffer_request.lower() == 'n' or buffer_request.lower() == 'no':
+                return False
+            else:
+                print("Invalid input. Please enter 'y' or 'n'.")
+    return DEFAULTS["large_buffer"]
 
-def ask_tau():
-    while True:
-        tau_request = input("Start τ indexing from 0 or 1? (0/1, default = 1): ")
-        if tau_request == '0':
-            return True
-        elif tau_request == '1' or tau_request == '':
-            return False
-        else:
-            print("Invalid input. Please enter '0' or '1'.")
+def ask_tau(interactive=False): #check header = true as well when dealing with tau indexing. Do not allow if no header.
+    """Ask the user about τ indexing and time sources."""
+    zero_start = DEFAULTS["zero_start"]
+    time_sources = DEFAULTS["time_sources"]
+    
+    if interactive:
+        while True:
+            tau_request = input("Start τ indexing from 0 or 1? (0/1, default = 1 and its advised to have a header with 0 indexed τ): ")
+            if tau_request == '0':
+                zero_start = True
+                break
+            elif tau_request == '1' or tau_request == '':
+                zero_start = False
+                break
+            else:
+                print("Invalid input. Please enter '0' or '1'.")
+
+        while True:
+            time_sources_input = input("Enter number of time sources per configuration (default = 4): ")
+            if time_sources_input == '':
+                time_sources = 4
+                break
+            try:
+                time_source_val = int(time_sources_input)
+                if time_source_val > 0:
+                    time_sources = time_source_val
+                    break
+                else:
+                    print("Please enter a positive integer for the time sources.")
+            except ValueError:
+                print("Invalid input. Please enter a positive integer for the time sources")
+    
+    return zero_start, time_sources
+    
 
 def optimal_settings(enable_logging=False, large_buffer=False):
+    """
+    Determine optimal settings for multithreading and buffer size based on 
+    CPU cores and user preference.
+    """
     cpu_count = multiprocessing.cpu_count()
     optimal_workers = max(2, min(cpu_count -1, 8))
 
@@ -170,6 +216,7 @@ def optimal_settings(enable_logging=False, large_buffer=False):
     return optimal_workers, buffer_size
 
 def file_allowed(input_path):
+    """Check if the file extension is allowed for processing."""
     accepted_extensions = [".gpl", ".txt"]
     file_extension = os.path.splitext(input_path)[1]
     if file_extension not in accepted_extensions:
@@ -177,7 +224,8 @@ def file_allowed(input_path):
     else:
         return file_extension
      
-def csv_writer(label, configurations, output_path, buffer_size, header=False, enable_logging=False, zero_start=False):
+def csv_writer(label, configurations, output_path, buffer_size, header=False, enable_logging=False, zero_start=False, time_sources=4):
+    """Writes data arrays to CSV files using multithreading."""
     try:
         # Safe filename
         filename = label.replace(".ll", "").replace("/", "_").replace(".", "_").replace(" ", "_")
@@ -194,7 +242,9 @@ def csv_writer(label, configurations, output_path, buffer_size, header=False, en
                 with open(output_file,'w') as file:
                     file.write(','.join(header_row) + '\n') #manual header write
                             
-                config_ids = np.arange(1, len(data_matrix)+1).reshape(-1,1)
+                num_configs = len(data_matrix) // time_sources
+                id_range = np.arange(1, num_configs + 1)
+                config_ids = np.repeat(id_range, time_sources).reshape(-1,1) #assuming 4 measurements per config
                 id_data = np.hstack((config_ids, data_matrix)) #horizontal stacking
                 with open(output_file,'a') as file: #append config id and data to header written file
                     np.savetxt(file, id_data, delimiter=",", fmt="%.16g")  
@@ -203,14 +253,16 @@ def csv_writer(label, configurations, output_path, buffer_size, header=False, en
         else:
             return "ERROR"
         if enable_logging:
-            logging.info(f"Data for label {label} saved to {output_file} of dimensions {data_matrix.shape[0]} rows x {data_matrix.shape[1]} columns.")
+            config_count = len(data_matrix) // time_sources
+            logging.info(f"Data for label {label} saved to {output_file}: {config_count} configs × {time_sources} time sources = {data_matrix.shape[0]} rows × {data_matrix.shape[1]} columns.")
         return "SUCCESS"
     except Exception as e:
         if enable_logging:
             logging.error(f"Error in writing CSV for label {label}: {e}")
         return "ERROR"
 
-def data_to_csv_multithreaded(input_path, output_path, file_extension, header=False, enable_logging=False, buffer=False, zero_start=False):
+def data_to_csv_multithreaded(input_path, output_path, file_extension, header=False, enable_logging=False, buffer=False, zero_start=False, time_sources=4):
+    """Convert data file to CSV format using multithreading."""
     accepted_extensions = [".gpl", ".txt"]
     if file_extension not in accepted_extensions:
         raise ValueError("File format not supported for conversion.")
@@ -287,7 +339,7 @@ def data_to_csv_multithreaded(input_path, output_path, file_extension, header=Fa
 
     with ThreadPoolExecutor(max_workers=optimal_workers) as executor:
         future_to_label = {
-            executor.submit(csv_writer, label, configurations, output_path, buffer_size, header, enable_logging, zero_start): label
+            executor.submit(csv_writer, label, configurations, output_path, buffer_size, header, enable_logging, zero_start, time_sources): label
             for label, configurations in dict_list.items()
         }
         for future in as_completed(future_to_label):
@@ -322,11 +374,12 @@ def data_to_csv_multithreaded(input_path, output_path, file_extension, header=Fa
             print(line)
 
 if __name__ == "__main__":
-    enable_logs = False 
-    if len(sys.argv) > 1:
-        for arg in sys.argv[1:]:
-            if arg.lower() in ['--log', '--verbose', '-l', '-v']:
-                enable_logs = True
-                break
+    parser = argparse.ArgumentParser(description="Convert raw data files to CSV format.")
+    parser.add_argument("--logs", action="store_true", help="Enable detailed logging to a log file.")
+    parser.add_argument("--i", action="store_true", help="Enable interactive mode for user inputs.")
 
-    main(enable_logging=enable_logs)
+    args = parser.parse_args()
+    enable_logs = args.logs
+    interactive = args.i
+
+    convert_data(enable_logging=enable_logs, interactive=interactive)
