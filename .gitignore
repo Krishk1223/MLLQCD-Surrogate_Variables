@@ -1,14 +1,72 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+*.pyo
+*.pyd
 build/
 dist/
 wheels/
 *.egg-info
+*.egg
 
 # Virtual environments
 .venv
+venv/
+ENV/
+env/
 
-# DS store:
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# DS store
 .DS_Store
 
+# Model checkpoints and logs
+checkpoints/
+runs/
+mlruns/
+results/model_checkpoints/
+*.pth
+*.pt
+*.ckpt
+
+# TensorBoard logs
+events.out.tfevents.*
+
+# Data files (kept commented to track data for now)
+# data/raw/
+# data/processed/
+# data/experiments/
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+tmp/
+temp/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# pytest cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MyPy cache
+.mypy_cache/
+.dmypy.json
+dmypy.json
