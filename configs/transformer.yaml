@@ -1,6 +1,6 @@
 #Temporary YAML config for transformer
 model:
-  name: "transformer_model"
+  name: "transformer"
   input_dim: 1
   d_model: 128 
   num_layers: 4
@@ -14,30 +14,36 @@ model:
     output_dim: 1
     pooling: "mean"
 
+data:
+  input_data_path: "data/experiments/"
+
 training:
-  batch_size: 64
+  batch_size: 32
   num_workers: 0
   shuffle: true
-  num_epochs: 50
+  save_best_model: true
+  checkpoint_dir : "checkpoints/transformer/"
+  num_epochs: 10
   patience: 10
-  optimiser: "adam"
-  learning_rate: 0.001
+  optimiser: "adamw"
+  learning_rate: 0.0001
   weight_decay: 1e-4
   early_stopping: true
   loss_function: "MSELoss"
   scheduler:
-    use_scheduler: false
+    use_scheduler: true
     type: "ReduceLROnPlateau"
     patience: 5
-    factor: 0.5
+    factor: 0.1
     mode: "min"
     step_size: 10
     gamma: 0.1
   gradient_clipping:
     use_clipping: true
     max_norm: 1.0 
+  tensorboard_log_dir: "tensorboard_logs/transformer/"
 
 logging:
   log_interval: 50
   save_model: true
-  save_path: "results/model_checkpoints/transformer/"
+  save_path: "models/transformer/"

@@ -41,10 +41,10 @@ results/model_checkpoints/
 # TensorBoard logs
 events.out.tfevents.*
 
-# Data files (kept commented to track data for now)
-# data/raw/
-# data/processed/
-# data/experiments/
+#Data files (kept commented to track data for now)
+data/raw/
+data/processed/
+#data/experiments/
 
 # Logs
 logs/
