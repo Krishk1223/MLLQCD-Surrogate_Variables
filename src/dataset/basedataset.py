@@ -12,10 +12,14 @@ class BaseDataset(Dataset):
     
     def _load_data(self):
         file_dict = {
-            'train': 'train_data.npy',
-            'eval': 'evaluation_data.npy',
-            'bias_correction': 'bias_correction_data.npy',
-            'test': 'test_data.npy'
+            'train_feature': 'train_data_X.npy',
+            'train_target': 'train_data_y.npy',
+            'eval_feature': 'evaluation_data_X.npy',
+            'eval_target': 'evaluation_data_y.npy',
+            'bias_correction_feature': 'bias_correction_data_X.npy',
+            'bias_correction_target': 'bias_correction_data_y.npy',
+            'test_feature': 'test_data_X.npy',
+            'test_target': 'test_data_y.npy'
         }
         filename = file_dict.get(self.split)
         if filename is None:
