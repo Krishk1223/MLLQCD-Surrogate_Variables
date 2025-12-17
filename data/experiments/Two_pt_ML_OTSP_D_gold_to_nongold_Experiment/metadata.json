@@ -1,0 +1,19 @@
+{
+    "experiment_number": 1,
+    "name": "2 point correlator OTSP: Gold to Non-Gold Operator Prediction",
+    "description": "Cheap symmetric operators used to predict expensive symmetry breaking operators",
+    "input filepath": "data/processed/unaveraged_data/",
+    "num features": 1,
+    "input filename": "2pt_D_gold_fine.csv",
+    "num targets": 1,
+    "target filename": "2pt_D_nongold_fine.csv",
+    "output path": "data/experiments/Two_pt_ML_OTSP_D_gold_to_nongold_Experiment/",
+    "training feature file": "train_data_X.npy",
+    "training target file": "train_data_y.npy",
+    "evaluation feature file": "evaluation_data_X.npy",
+    "evaluation target file": "evaluation_data_y.npy",
+    "bias correction feature file": "bias_correction_data_X.npy",
+    "bias correction target file": "bias_correction_data_y.npy",
+    "test feature file": "test_data_X.npy",
+    "test target file": "test_data_y.npy"
+}
