@@ -11,6 +11,7 @@ from src.dataloader.transformer_dataloader import TransformerDataLoader
 from pathlib import Path
 import yaml
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import json
 
 
 class Transformer(BaseModel):
@@ -34,11 +35,12 @@ class Transformer(BaseModel):
             self.device = torch.device('cpu') #cpu if nothing else available
 
         #project root and data path:
-        project_root = Path(__file__).parent.parent.parent #MLLQCD/
+        project_root = Path(__file__).parent.parent.parent.parent 
         self.data_path = project_root / self.config['data']['input_data_path'] / experiment_folder
         self.results_dir = project_root / 'results' / experiment_folder
+        self.model_dir = project_root / 'models' / experiment_folder / 'transformer_model'
         self.results_dir.mkdir(parents=True, exist_ok=True)
-        
+        self.model_dir.mkdir(parents=True, exist_ok=True)
 
         #Component initialisation
         self.input_embed = InputEmbedding(
@@ -81,7 +83,7 @@ class Transformer(BaseModel):
         self.is_trained = False
         return self
     
-    def train_model(self, X_train, y_train, X_val, y_val):
+    def train_model(self):
         #Training logic will be implemented here
         self.to(self.device)
 
@@ -136,8 +138,10 @@ class Transformer(BaseModel):
         best_val_loss = float('inf')
         patience_counter = 0
 
-        writer_dir = Path('runs') / self.training_config['tensorboard_log_dir']
-        writer = SummaryWriter(log_dir=writer_dir)
+        # TensorBoard writer - save to results directory
+        writer_dir = self.results_dir / 'tensorboard_logs'
+        writer_dir.mkdir(parents=True, exist_ok=True)
+        writer = SummaryWriter(log_dir=str(writer_dir))
 
         writer.add_text('Hyperparameters', str({
             'd_model' : self.model_config['d_model'],
@@ -213,14 +217,14 @@ class Transformer(BaseModel):
             print(f"Epoch [{epoch+1}/{self.training_config['num_epochs']}], "
             f"Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
         
-            #Early stopping:
+            #Early stopping and model saving:
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 patience_counter = 0
                 if self.logging_config['save_best_model']:
-                    checkpoint_path = Path(self.training_config.get('checkpoint_dir', 'checkpoints'))
-                    checkpoint_path.mkdir(parents=True, exist_ok=True)
-                    self.save_model(checkpoint_path / 'best_model.pth', override=True)
+                    # Save to model_dir instead of checkpoint_dir
+                    best_model_path = self.model_dir / 'best_model.pth'
+                    self.save_model(best_model_path, override=True)
             else:
                 patience_counter += 1
                 if patience_counter >= self.training_config['early_stopping_patience']:
@@ -239,12 +243,24 @@ class Transformer(BaseModel):
             'best_val_loss' : best_val_loss
         })
         writer.close() #close the tensorboard writer
+        
+        # Save final model
+        final_model_path = self.model_dir / 'final_model.pth'
+        self.save_model(final_model_path, override=True)
+        
         self.is_trained = True
         print(f"Training completed.")
+        print(f"Best model saved to: {self.model_dir / 'best_model.pth'}")
+        print(f"Final model saved to: {final_model_path}")
+        print(f"TensorBoard logs saved to: {writer_dir}")
     
-    def bias_correction(self, bias_corr_data):
-        #Bias correction logic post training and eval step will be over here
-        pass
+    def compute_bias_correction(self):
+        """Bias correction method to adjust model predictions."""
+        bias_loader = TransformerDataLoader(self.data_path, self.config, split='bias')
+        self.eval() #eval mode
+        with torch.no_grad():
+            y_pred = 
+
 
     def predict_model(self):
         """Generates predictions on test data after training. Does not compute metrics for evaluation.
@@ -261,6 +277,12 @@ class Transformer(BaseModel):
                 all_predictions.append(predictions.cpu()) #move to cpu for aggregation
 
         all_predictions = torch.cat(all_predictions, dim=0).numpy()
+        
+        # Save predictions to results directory
+        predictions_path = self.results_dir / 'test_predictions.npy'
+        np.save(predictions_path, all_predictions)
+        print(f"Test predictions saved to: {predictions_path}")
+        
         return all_predictions #returns tensor of predictions
 
     def evaluate_model(self):
@@ -293,22 +315,53 @@ class Transformer(BaseModel):
             'Mean Absolute Error' : mae,
             'R2 Score' : r2
         }
-        print(f"Evaluation Metrics:")
+        
+        print(f"\nEvaluation Metrics:")
         for metric_name, metric_value in metrics.items():
             print(f"{metric_name} : {metric_value:.6f}")
+        
+        # Save metrics to results directory
+        metrics_path = self.results_dir / 'evaluation_metrics.json'
+        with open(metrics_path, 'w') as f:
+            json.dump(metrics, f, indent=4)
+        print(f"Evaluation metrics saved to: {metrics_path}")
+        
+        # Save predictions
+        np.save(self.results_dir / 'test_predictions.npy', predictions)
+        print(f"Test predictions saved to: {self.results_dir / 'test_predictions.npy'}")
         return metrics, predictions
 
-    def save_model(self, save_path, override=False):
+    def save_model(self, save_path=None, override=False):
         if not self.is_trained and not override:
             raise ValueError("Model must be trained before saving.")
         elif not self.logging_config['save_model']:
             raise ValueError("Model saving is disabled in the transformer configuration.")
+        
+        # Default save path to model_dir
+        if save_path is None:
+            save_path = self.model_dir / 'model.pth'
         else:
-            torch.save(self.state_dict(), save_path)
-            print(f"Model saved to {save_path}")
+            save_path = Path(save_path)
+        
+        # Ensure parent directory exists
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        torch.save(self.state_dict(), save_path)
+        print(f"Model saved to {save_path}")
     
-    def load_model(self, load_path):
-        self.load_state_dict(torch.load(load_path))
-    
+    def load_model(self, load_path=None):
+        # Default load path to model_dir
+        if load_path is None:
+            load_path = self.model_dir / 'best_model.pth'
+        else:
+            load_path = Path(load_path)
+        
+        if not load_path.exists():
+            raise FileNotFoundError(f"Model file not found: {load_path}")
+        
+        self.load_state_dict(torch.load(load_path, map_location=self.device))
+        self.is_trained = True
+        print(f"Model loaded from {load_path}")
+
 
 

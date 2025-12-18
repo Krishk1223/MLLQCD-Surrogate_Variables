@@ -15,8 +15,18 @@ class BaseModel(ABC):
     def train(self, train_data, val_data):
         pass
 
-    def bias_correction(self, bias_corr_data):
+    def compute_bias_correction(self):
         pass
+    
+    def apply_bias_correction(self, y_pred, bias_vector):
+        """Applies bias correction to the predictions.
+        Args:
+            y_pred: Model predictions (numpy array)
+            bias_vector: Bias correction vector (numpy array)
+        Returns:
+            C_corr = C_pred - bias_correction_vector.
+        """
+        return y_pred - bias_vector
 
     def predict(self, test_data):
         pass

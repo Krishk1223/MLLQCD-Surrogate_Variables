@@ -6,9 +6,13 @@ from .basedataset import BaseDataset
 
 
 class TransformerDataset(BaseDataset):
-    def __init__(self, data_path, split='train'):
-        super().__init__(data_path, split)
-    
+    def __init__(self, data_path):
+        nn.Dataset.__init__(self)
+        super().__init__(data_path)
+        
+    def __len__(self):
+        return len(self.data)
+
     def __getitem__(self, idx):
         sample = self.data[idx]
 

@@ -24,7 +24,7 @@ def TransformerDataLoader(data_path, config, split='train'):
         )
         return train_loader #returns only train loader
 
-    if split == 'eval':
+    elif split == 'eval':
         eval_dataset = TransformerDataset(data_path, split='eval') # eval dataset instance
         eval_loader = DataLoader(
             eval_dataset,
@@ -35,7 +35,17 @@ def TransformerDataLoader(data_path, config, split='train'):
         )
         return eval_loader #returns only eval loader
 
-    if split == 'test':
+    elif split == 'bias':
+        bias_dataset = TransformerDataset(data_path, split='bias') # bias correction dataset instance
+        bias_loader = DataLoader(
+            bias_dataset,
+            batch_size = batch_size,
+            shuffle=False,
+            num_workers=workers,
+            pin_memory=pin_memory
+        )
+
+    elif split == 'test':
         test_dataset = TransformerDataset(data_path, split='test') # test dataset instance
         test_loader = DataLoader(
             test_dataset,

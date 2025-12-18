@@ -22,9 +22,8 @@ training:
   num_workers: 0
   shuffle: true
   save_best_model: true
-  checkpoint_dir : "checkpoints/transformer/"
   num_epochs: 10
-  patience: 10
+  early_stopping_patience: 10
   optimiser: "adamw"
   learning_rate: 0.0001
   weight_decay: 1e-4
@@ -41,9 +40,7 @@ training:
   gradient_clipping:
     use_clipping: true
     max_norm: 1.0 
-  tensorboard_log_dir: "tensorboard_logs/transformer/"
 
 logging:
   log_interval: 50
   save_model: true
-  save_path: "models/transformer/"
