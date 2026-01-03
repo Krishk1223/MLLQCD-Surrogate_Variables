@@ -1,0 +1,40 @@
+# CNN Configuration
+data:
+  input_data_path: 'data/processed'
+
+model:
+  # CNN architecture
+  hidden_channels: [64, 128, 64]  # Number of channels in each conv layer
+  kernel_sizes: [5, 3, 3]         # Kernel size for each conv layer
+  dropout: 0.2
+  use_batch_norm: true
+
+training:
+  batch_size: 16
+  num_epochs: 100
+  learning_rate: 0.001
+  weight_decay: 0.001
+  optimiser: 'adamw'
+  loss_function: 'MSE'  # Possible Options: 'MSE', 'MAE', 'HuberLoss'
+  early_stopping_patience: 15
+  num_workers: 0
+  
+  scheduler:
+    use_scheduler: true
+    type: 'ReduceLROnPlateau'
+    patience: 5
+    factor: 0.5
+    mode: 'min'
+    warmup_epochs: 3
+    # STEPLR specific options:
+    # step_size: 10
+    # gamma: 0.5
+  
+  gradient_clipping:
+    use_clipping: true
+    max_norm: 1.0
+
+logging:
+  save_model: true
+  save_best_model: true
+  save_final_model: false

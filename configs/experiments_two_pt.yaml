@@ -1,0 +1,61 @@
+# Two-Point Correlator Experiments
+# Each experiment maps input correlators to target correlators
+
+experiments:
+  1:
+    name: "D Gold to Non-Gold OTSP"
+    description: "Cheap symmetric operators to predict expensive symmetry breaking operators"
+    type: "2pt"
+    input_path: "data/processed/unaveraged_data"
+    output_path: "data/experiments/Two_pt_ML_OTSP_D_gold_to_nongold_Experiment"
+    input_files: ["2pt_D_gold_fine.csv"]
+    target_file: "2pt_D_nongold_fine.csv"
+
+  2:
+    name: "Kaon qmax to qsq0"
+    description: "Predicting Kaon correlators at q^2=0 from highest momentum"
+    type: "2pt"
+    input_path: "data/processed/unaveraged_data"
+    output_path: "data/experiments/Two_pt_ML_Kaon_qmax_to_qsq0_Experiment"
+    input_files: ["2pt_K_fine.csv"]
+    target_file: "2pt_K_fine_qsq0.csv"
+
+  3:
+    name: "Kaon qmax to qsqmaxby3"
+    description: "Predicting Kaon correlators at q^2=q^2_max/3 from highest momentum"
+    type: "2pt"
+    input_path: "data/processed/unaveraged_data"
+    output_path: "data/experiments/Two_pt_ML_Kaon_qmax_to_qsqmaxby3_Experiment"
+    input_files: ["2pt_K_fine.csv"]
+    target_file: "2pt_K_fine_qsqmaxby3.csv"
+
+  4:
+    name: "Kaon qmax to 2qsqmaxby3"
+    description: "Predicting Kaon correlators at q^2=2*q^2_max/3 from highest momentum"
+    type: "2pt"
+    input_path: "data/processed/unaveraged_data"
+    output_path: "data/experiments/Two_pt_ML_Kaon_qmax_to_qsq2maxby3_Experiment"
+    input_files: ["2pt_K_fine.csv"]
+    target_file: "2pt_K_fine_2qsqmaxby3.csv"
+
+  5:
+    name: "Cross Channel D to K"
+    description: "Using D meson correlators to predict Kaon correlators"
+    type: "2pt"
+    input_path: "data/processed/unaveraged_data"
+    output_path: "data/experiments/Two_pt_ML_Cross_Channel_StationaryExtrapolation_Experiment"
+    input_files: ["2pt_D_gold_fine.csv", "2pt_D_nongold_fine.csv"]
+    target_file: "2pt_K_fine.csv"
+
+# Data split fractions
+splits:
+  train: 0.15
+  eval: 0.15
+  bias_correction: 0.15
+  test: 0.55
+
+# Global settings
+settings:
+  time_sources: 4
+  seed: 42
+

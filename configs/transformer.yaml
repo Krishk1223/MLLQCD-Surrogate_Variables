@@ -1,15 +1,14 @@
-#Temporary YAML config for transformer
+
 model:
   name: "transformer"
-  input_dim: 1
-  d_model: 128 
-  num_layers: 4
-  num_heads: 8 
+  d_model: 64
+  num_layers: 2
+  num_heads: 4 
   max_len: 96
   positional_encoding: "sinusoidal"
   learnable_pos_encoding: false
-  d_ff: 512
-  dropout: 0.1
+  d_ff: 256  
+  dropout: 0.2
   regression_head:
     output_dim: 1
     pooling: "mean"
@@ -18,29 +17,28 @@ data:
   input_data_path: "data/experiments/"
 
 training:
-  batch_size: 32
+  batch_size: 16
   num_workers: 0
   shuffle: true
-  save_best_model: true
-  num_epochs: 10
-  early_stopping_patience: 10
+  num_epochs: 100
+  early_stopping_patience: 15
   optimiser: "adamw"
   learning_rate: 0.0001
-  weight_decay: 1e-4
-  early_stopping: true
-  loss_function: "MSELoss"
+  weight_decay: 0.001
+  loss_function: "HuberLoss"
   scheduler:
     use_scheduler: true
+    warmup_epochs: 3
     type: "ReduceLROnPlateau"
-    patience: 5
-    factor: 0.1
+    patience: 7
+    factor: 0.5
     mode: "min"
-    step_size: 10
-    gamma: 0.1
   gradient_clipping:
     use_clipping: true
-    max_norm: 1.0 
+    max_norm: 1.0
 
 logging:
-  log_interval: 50
+  log_interval: 10
   save_model: true
+  save_best_model: true
+  save_final_model: false
