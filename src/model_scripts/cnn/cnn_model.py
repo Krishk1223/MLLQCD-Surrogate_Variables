@@ -3,10 +3,6 @@ import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from ..base_model import BaseModel
-from .transformer_components.InputEmbedding import InputEmbedding
-from .transformer_components.PositionalEncoding import PositionalEncoding
-from .transformer_components.EncoderLayer import EncoderLayer
-from .transformer_components.RegressionHead import RegressionHead
 from pathlib import Path
 import yaml
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
@@ -15,182 +11,204 @@ import json
 from typing import Optional
 
 
-class Transformer(nn.Module, BaseModel):
-    def __init__(self, config, experiment_folder, input_dim=1, num_layers=None):
+class CNN(nn.Module, BaseModel):
+    def __init__(self, config, experiment_folder, input_channels=1):
+        """
+        1D Convolutional Neural Network for sequence-to-sequence regression.
+        
+        Args:
+            config: Configuration dictionary
+            experiment_folder: Name of experiment folder
+            input_channels: Number of input channels/sequences (default 1)
+        """
         nn.Module.__init__(self)
         BaseModel.__init__(self, config)
 
-        #config:
+        # Config
         self.config = config
         self.model_config = config['model']
         self.training_config = config['training']
-        self.logging_config = config['logging'] #will set up logging later
+        self.logging_config = config['logging']
         self.device = None
 
-        #Device setup:
+        # Device setup
         if torch.cuda.is_available():
-            self.device = torch.device('cuda') #use CUDA if available
+            self.device = torch.device('cuda')
         elif torch.backends.mps.is_available():
-            self.device = torch.device('mps') # use metal performance shaders for macs with apple silicon
+            self.device = torch.device('mps')
         else:
-            self.device = torch.device('cpu') #cpu if nothing else available
+            self.device = torch.device('cpu')
 
-        #project root and data path:
-        project_root = Path(__file__).parent.parent.parent.parent 
+        # Project root and paths
+        project_root = Path(__file__).parent.parent.parent.parent
         self.data_path = project_root / self.config['data']['input_data_path'] / experiment_folder
         self.results_dir = project_root / 'results' / experiment_folder
-        self.model_dir = project_root / 'models' / experiment_folder / 'transformer_model'
+        self.model_dir = project_root / 'models' / experiment_folder / 'cnn_model'
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
-        # Determine number of layers
-        if num_layers is None:
-            num_layers = self.model_config.get('num_layers', 2)
-
-        #Component initialisation
-        self.input_embed = InputEmbedding(
-            input_dim,
-            self.model_config['d_model']
+        # CNN architecture parameters
+        self.input_channels = input_channels
+        self.hidden_channels = self.model_config.get('hidden_channels', [64, 128, 64])
+        self.kernel_sizes = self.model_config.get('kernel_sizes', [5, 3, 3])
+        self.dropout_rate = self.model_config.get('dropout', 0.2)
+        self.use_batch_norm = self.model_config.get('use_batch_norm', True)
+        
+        # Build convolutional layers
+        self.conv_layers = nn.ModuleList()
+        self.bn_layers = nn.ModuleList()
+        self.dropout = nn.Dropout(self.dropout_rate)
+        
+        in_channels = self.input_channels
+        for i, (out_channels, kernel_size) in enumerate(zip(self.hidden_channels, self.kernel_sizes)):
+            # Padding to maintain sequence length (same padding)
+            padding = kernel_size // 2
+            self.conv_layers.append(
+                nn.Conv1d(in_channels, out_channels, kernel_size, padding=padding)
             )
-        self.pos_encoder = PositionalEncoding(
-            self.model_config['d_model'],
-            self.model_config['max_len'],
-            learnable = self.model_config['learnable_pos_encoding'] 
-            )
-        self.encoder_layers = nn.ModuleList([
-            EncoderLayer(
-                self.model_config['d_model'],
-                self.model_config['num_heads'],
-                self.model_config['d_ff'],
-                self.model_config['dropout'])
-            for _ in range(num_layers)
-        ])
-        self.regressor_head = RegressionHead(
-            self.model_config['d_model'],
-            self.model_config['regression_head']['output_dim'])
-
+            if self.use_batch_norm:
+                self.bn_layers.append(nn.BatchNorm1d(out_channels))
+            in_channels = out_channels
+        
+        # Activation
+        self.activation = nn.LeakyReLU()
+        
+        # Output projection: map from hidden_channels[-1] back to 1 channel
+        self.output_conv = nn.Conv1d(self.hidden_channels[-1], 1, kernel_size=1)
+        
         self.is_built = True
 
     def forward(self, x):
-        x = self.input_embed(x)
-        x = self.pos_encoder(x)
-
-        for layer in self.encoder_layers:
-            x = layer(x)
-
-        output = self.regressor_head(x)
-        return output
+        """
+        Forward pass.
+        
+        Args:
+            x: Input tensor of shape (batch, seq_len, num_sequences)
+               from dataloader standard format
+               
+        Returns:
+            Output tensor of shape (batch, seq_len, 1)
+        """
+        # Permute to Conv1d format
+        x = x.permute(0, 2, 1)
+        
+        # Pass through convolutional layers
+        for i, conv in enumerate(self.conv_layers):
+            x = conv(x)
+            if self.use_batch_norm:
+                x = self.bn_layers[i](x)
+            x = self.activation(x)
+            x = self.dropout(x)
+        
+        # Output projection
+        x = self.output_conv(x)
+        
+        # Permute back to standard format
+        x = x.permute(0, 2, 1)
+        
+        return x
 
     def count_parameters(self):
         """Count trainable parameters in the model."""
-        return sum(p.numel() for p in self.parameters() if p.requires_grad) 
-    
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
     def build_model(self):
-        #Components built in init but method used to verify if trained
+        """Verify model is built and ready for training."""
         if not self.is_built:
             raise ValueError("Model components are not built properly.")
         self.is_trained = False
         return self
-    
+
     def train_model(self, trainloader, evalloader):
-        #Training logic will be implemented here
+        """Training loop with TensorBoard logging, early stopping, and LR scheduling."""
         self.to(self.device)
 
-        #Optimiser:
-        if self.training_config['optimiser'] == 'adamw': #most common for transformers
+        # Optimizer
+        if self.training_config['optimiser'] == 'adamw':
             optimiser = torch.optim.AdamW(
-            self.parameters(),
-            lr=self.training_config['learning_rate'],
-            weight_decay = self.training_config['weight_decay']
+                self.parameters(),
+                lr=self.training_config['learning_rate'],
+                weight_decay=self.training_config['weight_decay']
             )
-
-        # once there is some implenmentation in pytorch for Lion optimiser I will add it here.
-
-        else: #default to adam
+        else:
             optimiser = torch.optim.Adam(
                 self.parameters(),
                 lr=self.training_config['learning_rate'],
-                weight_decay = self.training_config['weight_decay']
-                )
+                weight_decay=self.training_config['weight_decay']
+            )
 
-        #Loss function:
+        # Loss function
         if self.training_config['loss_function'] == 'HuberLoss':
             criterion = nn.HuberLoss()
         elif self.training_config['loss_function'] == 'MAE':
             criterion = nn.L1Loss()
         else:
-            criterion = nn.MSELoss() #default
-        
-        #LR scheduler for faster convergence:
-        if not self.training_config['scheduler']['use_scheduler']:
-            scheduler = None
-        else:
+            criterion = nn.MSELoss()
+
+        # LR scheduler
+        scheduler = None
+        if self.training_config['scheduler']['use_scheduler']:
             if self.training_config['scheduler']['type'] == 'ReduceLROnPlateau':
                 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                     optimiser,
-                    patience = self.training_config['scheduler']['patience'],
-                    factor = self.training_config['scheduler']['factor'],
-                    mode = self.training_config['scheduler']['mode']
+                    patience=self.training_config['scheduler']['patience'],
+                    factor=self.training_config['scheduler']['factor'],
+                    mode=self.training_config['scheduler']['mode']
                 )
             elif self.training_config['scheduler']['type'] == 'StepLR':
                 scheduler = torch.optim.lr_scheduler.StepLR(
                     optimiser,
-                    step_size = self.training_config['scheduler']['step_size'],
-                    gamma = self.training_config['scheduler']['gamma']
+                    step_size=self.training_config['scheduler']['step_size'],
+                    gamma=self.training_config['scheduler']['gamma']
                 )
 
-        # Gradient clipping:
+        # Gradient clipping
+        max_grad_norm = None
         if self.training_config['gradient_clipping']['use_clipping']:
             max_grad_norm = self.training_config['gradient_clipping']['max_norm']
 
-        # Warmup scheduler setup:
+        # Warmup scheduler
         warmup_epochs = self.training_config['scheduler'].get('warmup_epochs', 0)
         warmup_scheduler = None
-
         if warmup_epochs > 0:
             def warmup_lambda(epoch):
                 if epoch < warmup_epochs:
-                    return (epoch + 1) / warmup_epochs 
+                    return (epoch + 1) / warmup_epochs
                 return 1.0
-            
             warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimiser, lr_lambda=warmup_lambda)
             print(f"Using LR warmup for {warmup_epochs} epochs")
 
-        #Training tracking variables:
+        # Training tracking
         best_val_loss = float('inf')
         patience_counter = 0
         best_state_dict = None
 
-        # TensorBoard writer - save to results directory
+        # TensorBoard
         writer_dir = self.results_dir / 'tensorboard_logs'
         writer_dir.mkdir(parents=True, exist_ok=True)
         writer = SummaryWriter(log_dir=str(writer_dir))
 
         writer.add_text('Hyperparameters', str({
-            'd_model' : self.model_config['d_model'],
-            'num_layers' : self.model_config['num_layers'],
-            'num_heads' : self.model_config['num_heads'],
-            'dropout' : self.model_config['dropout'],
-            'learning_rate' : self.training_config['learning_rate'],
-            'batch_size' : self.training_config['batch_size']
+            'hidden_channels': self.hidden_channels,
+            'kernel_sizes': self.kernel_sizes,
+            'dropout': self.dropout_rate,
+            'learning_rate': self.training_config['learning_rate'],
+            'batch_size': self.training_config['batch_size']
         }))
 
-        #dataloader setup for training and evaluation:
         train_loader = trainloader
         eval_loader = evalloader
 
-        # Training loop:
+        # Training loop
         for epoch in range(int(self.training_config['num_epochs'])):
-            self.train() #train mode
+            self.train()
             total_train_loss = 0.0
 
             for batch_idx, batch_data in enumerate(train_loader):
-                #Move data to relevant device for training:
                 inputs = batch_data['features'].to(self.device)
-                targets = batch_data['targets'].to(self.device) 
-                #zero gradients:
+                targets = batch_data['targets'].to(self.device)
+
                 optimiser.zero_grad()
-                #Forward pass:
                 predictions = self.forward(inputs)
                 
                 value_loss = criterion(predictions, targets)
@@ -199,56 +217,51 @@ class Transformer(nn.Module, BaseModel):
                 slope_loss = criterion(pred_derivative, target_derivative)
                 loss = value_loss + 2.0 * slope_loss
 
-                #Backprop:
                 loss.backward()
-                #Gradient clipping if enabled:
-                if self.training_config['gradient_clipping']['use_clipping']:
+                if max_grad_norm is not None:
                     torch.nn.utils.clip_grad_norm_(self.parameters(), max_grad_norm)
-                #optimiser:
                 optimiser.step()
                 total_train_loss += loss.item()
-            # Average training loss for epoch:
+
             avg_train_loss = total_train_loss / len(train_loader)
 
-            #Validation:
-            self.eval() #eval mode
+            # Validation
+            self.eval()
             total_val_loss = 0.0
             with torch.no_grad():
                 for batch_data in eval_loader:
                     inputs = batch_data['features'].to(self.device)
                     targets = batch_data['targets'].to(self.device)
-
                     predictions = self.forward(inputs)
                     loss = criterion(predictions, targets)
                     total_val_loss += loss.item()
+
             avg_val_loss = total_val_loss / len(eval_loader)
-            
-            # Warmup phase
+
+            # Scheduler step
             if warmup_scheduler is not None and epoch < warmup_epochs:
                 warmup_scheduler.step()
-            # Main scheduler phase (after warmup)
             elif scheduler is not None:
                 if self.training_config['scheduler']['type'] == 'ReduceLROnPlateau':
                     scheduler.step(avg_val_loss)
                 else:
                     scheduler.step()
-            # Get current learning rate
-            current_lr = optimiser.param_groups[0]['lr']
-            
-            #training history logging:
-            writer.add_scalar('Loss/Train', avg_train_loss, epoch+1) #training loss tracking
-            writer.add_scalar('Loss/Validation', avg_val_loss, epoch+1) #validation loss tracking
-            writer.add_scalar('learning_rate', current_lr, epoch+1) #learning rate tracking
-            writer.add_scalars('Loss/Train_vs_Validation', {
-                'Train' : avg_train_loss,
-                'Validation' : avg_val_loss},
-                epoch+1)
 
-            #Print epoch summary:
-            print(f"Epoch [{epoch+1}/{self.training_config['num_epochs']}], "
-            f"Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
-        
-            #Early stopping and model saving:
+            current_lr = optimiser.param_groups[0]['lr']
+
+            # Logging
+            writer.add_scalar('Loss/Train', avg_train_loss, epoch + 1)
+            writer.add_scalar('Loss/Validation', avg_val_loss, epoch + 1)
+            writer.add_scalar('learning_rate', current_lr, epoch + 1)
+            writer.add_scalars('Loss/Train_vs_Validation', {
+                'Train': avg_train_loss,
+                'Validation': avg_val_loss
+            }, epoch + 1)
+
+            print(f"Epoch [{epoch + 1}/{self.training_config['num_epochs']}], "
+                  f"Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
+
+            # Early stopping and checkpointing
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 patience_counter = 0
@@ -258,37 +271,35 @@ class Transformer(nn.Module, BaseModel):
                 patience_counter += 1
                 if patience_counter >= self.training_config['early_stopping_patience']:
                     print("Early stopping triggered.")
-                    writer.add_text('Training Stopped', f"Early stopping at epoch {epoch+1}")
+                    writer.add_text('Training Stopped', f"Early stopping at epoch {epoch + 1}")
                     break
-        
-        #Logging final metrics:
+
+        # Final logging
         writer.add_hparams({
-            'd_model' : self.model_config['d_model'],
-            'num_layers' : self.model_config['num_layers'],
-            'num_heads' : self.model_config['num_heads'],
-            'lr' : self.training_config['learning_rate'],
-        },
-        {
-            'best_val_loss' : best_val_loss
+            'hidden_channels': str(self.hidden_channels),
+            'kernel_sizes': str(self.kernel_sizes),
+            'lr': self.training_config['learning_rate'],
+        }, {
+            'best_val_loss': best_val_loss
         })
-        writer.close() #close the tensorboard writer
-        
+        writer.close()
+
         # Save best model (once at the end)
         if self.logging_config['save_best_model'] and best_state_dict is not None:
             best_model_path = self.model_dir / 'best_model.pth'
             torch.save(best_state_dict, best_model_path)
             print(f"Best model saved to: {best_model_path}")
-        
+
         # Save final model (current state, not best)
         if self.logging_config.get('save_final_model', False):
             final_model_path = self.model_dir / 'final_model.pth'
             self.save_model(final_model_path, override=True)
             print(f"Final model saved to: {final_model_path}")
-        
+
         self.is_trained = True
         print(f"Training completed.")
         print(f"TensorBoard logs saved to: {writer_dir}")
-
+    
     def compute_bias_correction(self, biasloader, target_scaler: StandardScaler):
         """Compute bias correction vector from bias correction dataset.
         
@@ -346,12 +357,11 @@ class Transformer(nn.Module, BaseModel):
         print(f"Bias vector stats - Mean: {np.mean(bias_vector):.6f}, Std: {np.std(bias_vector):.6f}")
         
         return bias_vector
-
-    def predict_model(self, testloader, target_scaler:Optional[StandardScaler]=None, 
-                      bias_vector: Optional[np.ndarray]=None, save_predictions=True):
-        """Generates predictions on test data after training. Does not compute metrics for evaluation.
-           Use evaluate method for computing metrics based on predictions.
-           
+    
+    def predict_model(self, testloader, target_scaler: Optional[StandardScaler] = None, 
+                      bias_vector: Optional[np.ndarray] = None, save_predictions=True):
+        """Generate predictions on test data.
+        
         Args:
             testloader: DataLoader for test data
             target_scaler: Fitted StandardScaler for inverse transform (required if bias_vector provided)
@@ -366,11 +376,11 @@ class Transformer(nn.Module, BaseModel):
             raise ValueError("Model must be trained before prediction.")
         if bias_vector is not None and target_scaler is None:
             raise ValueError("target_scaler is required when applying bias correction.")
-            
+
         test_loader = testloader
         all_predictions = []
         self.eval()
-        
+
         with torch.no_grad():
             for batch_data in test_loader:
                 inputs = batch_data['features'].to(self.device)
@@ -378,24 +388,24 @@ class Transformer(nn.Module, BaseModel):
                 all_predictions.append(predictions.cpu())
 
         all_predictions = torch.cat(all_predictions, dim=0).numpy()
-        
-        # Inverting standard scaling if scaler provided
+
+        # Inverse scaling if scaler provided
         unscaled = False
         if isinstance(target_scaler, StandardScaler):
             unscaled = True
             original_shape = all_predictions.shape
             all_predictions = target_scaler.inverse_transform(all_predictions.reshape(-1, 1))
             all_predictions = all_predictions.reshape(original_shape)
-        
+
         # Squeeze to (N_configs, seq_len)
         all_predictions = all_predictions.squeeze(-1)
-        
+
         # Apply bias correction if provided
         bias_corrected = False
         if bias_vector is not None:
-            all_predictions = all_predictions - bias_vector  # Subtract bias
+            all_predictions = all_predictions - bias_vector
             bias_corrected = True
-        
+
         if save_predictions:
             if bias_corrected:
                 np.save(self.results_dir / 'correlator_predictions.npy', all_predictions)
@@ -406,12 +416,12 @@ class Transformer(nn.Module, BaseModel):
             else:
                 np.save(self.results_dir / 'scaled_predictions.npy', all_predictions)
                 print(f"Test SCALED predictions saved with shape {all_predictions.shape} to: {self.results_dir / 'scaled_predictions.npy'}")
-        
+
         return all_predictions
 
-    def evaluate_model(self, testloader, target_scaler:Optional[StandardScaler]=None, 
-                        bias_vector: Optional[np.ndarray]=None, save_predictions=True):
-        """Evaluates testing data and computes metrics. Also saves metrics and predictions.
+    def evaluate_model(self, testloader, target_scaler: Optional[StandardScaler] = None, 
+                        bias_vector: Optional[np.ndarray] = None, save_predictions=True):
+        """Evaluate model on test data and compute metrics.
         
         Args:
             testloader: DataLoader for test data
@@ -425,15 +435,15 @@ class Transformer(nn.Module, BaseModel):
             If scaled only: (scaled_metrics, predictions)
         """
         if not self.is_trained:
-            raise ValueError("Model must be trained before model evaluation.")
+            raise ValueError("Model must be trained before evaluation.")
         if bias_vector is not None and target_scaler is None:
             raise ValueError("target_scaler is required when applying bias correction.")
-            
+
         predictions = []
         targets = []
         self.eval()
         test_loader = testloader
-        
+
         with torch.no_grad():
             for batch_data in test_loader:
                 inputs = batch_data['features'].to(self.device)
@@ -441,15 +451,15 @@ class Transformer(nn.Module, BaseModel):
                 output = self.forward(inputs)
                 predictions.append(output.cpu())
                 targets.append(target.cpu())
-                
+
         predictions = torch.cat(predictions, dim=0).numpy()
         targets = torch.cat(targets, dim=0).numpy()
-        
-        # Squeeze to (N_configs, seq_len) for metrics calculation
+
+        # Squeeze to (N_configs, seq_len)
         predictions = predictions.squeeze(-1)
         targets = targets.squeeze(-1)
-        
-        # Scaled metric computation (before any transforms)
+
+        # Scaled metrics (before any transforms)
         mse = mean_squared_error(targets, predictions)
         rmse = np.sqrt(mse)
         mae = mean_absolute_error(targets, predictions)
@@ -459,17 +469,17 @@ class Transformer(nn.Module, BaseModel):
             'Root Mean Squared Error': rmse,
             'Mean Absolute Error': mae
         }
-        
+
         print(f"\nEvaluation Metrics (Scaled):")
         for metric_name, metric_value in scaled_metrics.items():
             print(f"{metric_name}: {metric_value:.6f}")
-       
+
         # Save scaled metrics
         metrics_path = self.results_dir / 'scaled_evaluation_metrics.json'
         with open(metrics_path, 'w') as f:
             json.dump(scaled_metrics, f, indent=4)
         print(f"Evaluation SCALED metrics saved to: {metrics_path}")
-        
+
         unscaled = False
         bias_corrected = False
         
@@ -480,20 +490,20 @@ class Transformer(nn.Module, BaseModel):
             predictions = predictions.reshape(n_configs, seq_len)
             targets = target_scaler.inverse_transform(targets.reshape(-1, 1))
             targets = targets.reshape(n_configs, seq_len)
-            
+
             # Apply bias correction if provided
             if bias_vector is not None:
                 predictions = predictions - bias_vector
                 bias_corrected = True
                 print(f"\nApplied bias correction to predictions.")
-            
-            # Relative error metrics computation
+
+            # Relative error
             relative_errors = np.abs((targets - predictions) / (targets + 1e-10))
             mean_relative_error = np.mean(relative_errors)
             
             print(f"\nUnscaled Metrics{' (Bias-Corrected)' if bias_corrected else ''}:")
             print(f"Mean Relative Error: {mean_relative_error:.6f}")
-            
+
         if save_predictions:
             if unscaled:
                 np.save(self.results_dir / 'correlator_predictions.npy', predictions)
@@ -509,34 +519,31 @@ class Transformer(nn.Module, BaseModel):
                 return scaled_metrics, predictions
 
     def save_model(self, save_path=None, override=False):
+        """Save model state dict."""
         if not self.is_trained and not override:
             raise ValueError("Model must be trained before saving.")
         elif not self.logging_config['save_model']:
-            raise ValueError("Model saving is disabled in the transformer configuration.")
-        
-        # Default save path to model_dir
+            raise ValueError("Model saving is disabled in configuration.")
+
         if save_path is None:
             save_path = self.model_dir / 'model.pth'
         else:
             save_path = Path(save_path)
-        
-        # Ensure parent directory exists
+
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        
         torch.save(self.state_dict(), save_path)
         print(f"Model saved to {save_path}")
-    
+
     def load_model(self, load_path=None):
-        # Default load path to model_dir
+        """Load model state dict."""
         if load_path is None:
             load_path = self.model_dir / 'best_model.pth'
         else:
             load_path = Path(load_path)
-        
+
         if not load_path.exists():
             raise FileNotFoundError(f"Model file not found: {load_path}")
-        
+
         self.load_state_dict(torch.load(load_path, map_location=self.device))
         self.is_trained = True
         print(f"Model loaded from {load_path}")
-

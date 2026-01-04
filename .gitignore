@@ -24,7 +24,6 @@ env/
 
 # Jupyter Notebooks
 .ipynb_checkpoints/
-*.ipynb_checkpoints
 
 # DS store
 .DS_Store
@@ -40,8 +39,14 @@ results/model_checkpoints/
 
 # TensorBoard logs
 events.out.tfevents.*
+tensorboard_logs/
 
-#Data files (kept commented to track data for now)
+# Results (optional - uncomment if you don't want to track results)
+# results/
+
+# Model weights and scalers
+models/
+*.npz
 data/raw/
 data/processed/
 #data/experiments/
@@ -53,13 +58,11 @@ logs/
 # Temporary files
 *.tmp
 *.bak
-*.swp
 tmp/
 temp/
 
 # OS files
 Thumbs.db
-.DS_Store
 
 # pytest cache
 .pytest_cache/
@@ -70,3 +73,24 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Pickle files (can contain large preprocessed data)
+*.pkl
+*.pickle
+
+# HDF5 data files
+*.h5
+*.hdf5
+
+# Large numpy files
+*.npy
+
+# Wandb (if used)
+wandb/
+
+# Environment files with secrets
+.env
+.env.local
+
+# Conda
+.conda/
