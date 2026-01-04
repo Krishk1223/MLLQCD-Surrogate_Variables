@@ -36,7 +36,7 @@ def average_time_sources(input_path: Path, output_path: Path, pattern="*.csv", t
     print(f"Averaging time sources for {len(csv_files)} CSV files from {input_path}:")
 
     output_path.mkdir(exist_ok=True, parents=True)
-    subfolders = ["averaged_data", "jackknife_mean", "jackknife_errors"]
+    subfolders = ["averaged_data", "jackknife_mean", "jackknife_errors", 'jackknife_samples']
     for subfolder in subfolders:
         (output_path / subfolder).mkdir(exist_ok=True, parents=True)
     
@@ -82,7 +82,7 @@ def average_time_sources(input_path: Path, output_path: Path, pattern="*.csv", t
             averaged_data = np.mean(reshaped_data, axis=1) # naive mean over time sources
 
             #jackknife stats:
-            jackknife_mean, jackknife_error = jackknife_stats(averaged_data) #stats over time source averaged configs
+            jackknife_mean, jackknife_error, jackknife_samples = jackknife_stats(averaged_data) #stats over time source averaged configs
             
             #CSV for averaged data:
             averaged_df = pd.DataFrame(averaged_data, columns=numeric_cols)
@@ -92,8 +92,10 @@ def average_time_sources(input_path: Path, output_path: Path, pattern="*.csv", t
             #jackknife mean and error npy files:
             jackknife_mean_path = output_path / "jackknife_mean" / f"{ensemble_name}_jackknife_mean.npy"
             jackknife_error_path = output_path / "jackknife_errors" / f"{ensemble_name}_jackknife_error.npy"
+            jackknife_samples_path = output_path / "jackknife_samples" / f"{ensemble_name}_jackknife_samples.npy"
             np.save(jackknife_mean_path, jackknife_mean)
             np.save(jackknife_error_path, jackknife_error)
+            np.save(jackknife_samples_path, jackknife_samples)  # Saving jackknife samples as well
 
             print(f"Processed {ensemble_name}: {n_configs} configs averaged over {time_sources} time sources.")
             
@@ -134,7 +136,7 @@ def jackknife_stats(data: np.ndarray):
     jackknife_variance = ((N-1)/N)*np.sum(jackknife_difference**2, axis=0)
     jackknife_error = np.sqrt(jackknife_variance)
     
-    return jackknife_mean, jackknife_error
+    return jackknife_mean, jackknife_error, jackknife_samples
 
 if __name__ == "__main__":
     time_source_averaging()
