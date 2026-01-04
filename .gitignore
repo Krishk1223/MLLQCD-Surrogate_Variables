@@ -94,3 +94,6 @@ wandb/
 
 # Conda
 .conda/
+
+#GPL files:
+*.gpl
