@@ -12,7 +12,12 @@ class BaseModel(ABC):
     def build_model(self):
         pass
 
-    def train(self, train_data, val_data):
+    @abstractmethod
+    def train_model(self, train_data, val_data):
+        pass
+
+    @abstractmethod
+    def predict_model(self, test_data):
         pass
 
     def compute_bias_correction(self):
@@ -27,9 +32,6 @@ class BaseModel(ABC):
             C_corr = C_pred - bias_correction_vector.
         """
         return y_pred - bias_vector
-
-    def predict(self, test_data):
-        pass
 
     def save_model(self, save_path):
         pass

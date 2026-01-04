@@ -8,12 +8,12 @@ try:
      from src.preprocessing.convert_data import convert_data as convert_data_main
      from src.preprocessing.sanity_check import DataSanityChecker
      from src.preprocessing.averaged_data import time_source_averaging
-     from src.preprocessing.experiments import all_experiments_data_pipeline, single_experiment_data_pipeline
+     from src.preprocessing.experiments import generate_all, generate_experiment
 except ImportError:
     from convert_data import convert_data as convert_data_main
     from sanity_check import DataSanityChecker
     from averaged_data import time_source_averaging
-    from experiments import all_experiments_data_pipeline, single_experiment_data_pipeline
+    from experiments import generate_all, generate_experiment
 class PreprocessingPipeline:
     """End-to-end preprocessing pipeline for MLLQCD."""
     
@@ -42,20 +42,26 @@ class PreprocessingPipeline:
             logging.basicConfig(level=logging.WARNING)
         self.logger = logging.getLogger(__name__)
     
-    def run_full_pipeline(self, skip_steps=None, force_overwrite=False):
+    def run_full_pipeline(self, skip_steps=None, force_overwrite=False, config_type='2pt'):
         """
         Run the complete preprocessing pipeline.
         
         Args:
             skip_steps: List of steps to skip (e.g., ['convert', 'sanity_check'])
             force_overwrite: Force overwrite of existing data
+            config_type: Experiment config type ('2pt' or '3pt')
         """
         skip_steps = skip_steps or []
+        
+        # Build pipeline steps - experiments needs config_type
+        def experiments_step():
+            self.step_experiments(config_type=config_type)
+        
         pipeline_steps = [
             ('convert', self.step_convert_data),
             ('sanity_check', self.step_sanity_check),
             ('averaging', self.step_averaging),
-            ('experiments', self.step_experiments),
+            ('experiments', experiments_step),
         ]
         
         self.logger.info("Starting preprocessing pipeline...")
@@ -110,25 +116,26 @@ class PreprocessingPipeline:
             print("Averaging step failed. Please review the logs for details. Exiting pipeline.")
             sys.exit(1)
     
-    def step_experiments(self, tau_max=None, strategy='remove'):
+    def step_experiments(self, tau_max=None, strategy='remove', config_type='2pt'):
         """
         Step 4: Generate experiment data splits.
         
         Args:
             tau_max: Maximum tau cutoff (None uses all)
             strategy: Missing data strategy ('remove' for removing rows or 'warn' for warnung user)
+            config_type: Experiment config type ('2pt' or '3pt')
         """
-        self.logger.info("Generating experiment data splits...")
+        self.logger.info(f"Generating {config_type} experiment data splits...")
         start_time = time()
         try:
-            all_experiments_data_pipeline(tau_max=tau_max, strategy=strategy)
+            generate_all(config_type=config_type, tau_max=tau_max)
             self.logger.info("Experiment data generation completed successfully.")
         except Exception as e:
             self.logger.error(f"Experiment data generation failed: {str(e)}")
             print("Experiment data generation failed. Please review the logs for details. Exiting pipeline.")
             sys.exit(1)
     
-    def run_single_experiment(self, experiment_number, tau_max=None, strategy='remove'):
+    def run_single_experiment(self, experiment_number, tau_max=None, strategy='remove', config_type='2pt'):
         """
         Run preprocessing and generate data for a single experiment.
         
@@ -136,8 +143,9 @@ class PreprocessingPipeline:
             experiment_number: Experiment ID to process
             tau_max: Maximum tau cutoff
             strategy: Missing data strategy
+            config_type: Experiment config type ('2pt' or '3pt')
         """
-        self.logger.info(f"Running pipeline for Experiment {experiment_number}...")
+        self.logger.info(f"Running pipeline for Experiment {experiment_number} ({config_type})...")
         start_time = time()
         
         try:
@@ -145,7 +153,7 @@ class PreprocessingPipeline:
             self.step_sanity_check()
             self.step_averaging()
             self.logger.info(f"Generating data for Experiment {experiment_number}...")
-            single_experiment_data_pipeline(experiment_number, tau_max=tau_max, strategy=strategy)
+            generate_experiment(experiment_number, config_type=config_type, tau_max=tau_max)
             
             duration = time() - start_time
             self.logger.info(f"Experiment {experiment_number} completed in {duration:.2f}s")
@@ -203,6 +211,12 @@ Examples:
         help="Missing data handling strategy (default: remove)"
     )
     parser.add_argument(
+        '--config-type', '-c',
+        choices=['2pt', '3pt'],
+        default='2pt',
+        help="Experiment config type (default: 2pt)"
+    )
+    parser.add_argument(
         '--i',
         action='store_true',
         help="Interactive mode for convert data step"
@@ -216,12 +230,14 @@ Examples:
         pipeline.run_single_experiment(
             args.experiment,
             tau_max=args.tau_max,
-            strategy=args.strategy
+            strategy=args.strategy,
+            config_type=args.config_type
         )
     else:
         pipeline.run_full_pipeline(
             skip_steps=args.skip,
-            force_overwrite=False
+            force_overwrite=False,
+            config_type=args.config_type
         )
 
 
