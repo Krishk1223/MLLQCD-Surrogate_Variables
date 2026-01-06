@@ -95,5 +95,10 @@ wandb/
 # Conda
 .conda/
 
-#GPL files:
+# GPL files:
 *.gpl
+
+# Data directories
+data/
+results/
+.venv/

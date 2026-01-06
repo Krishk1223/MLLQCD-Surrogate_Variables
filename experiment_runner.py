@@ -18,7 +18,7 @@ from preprocessing.experiments import (
     load_config, get_experiment, get_experiment_folder, 
     generate_experiment, list_experiments
 )
-from training import train_experiment, train_parity_experiment, train_multichannel_experiment
+from training import train_model, train_all_models
 from analysis.physics_analysis import TwoPointReport
 
 MODELS = ['cnn', 'mlp', 'gbr', 'transformer']
@@ -74,21 +74,10 @@ def run_experiment_data_generation(experiment_num, config_type='2pt', force=Fals
         return None, None
 
 
-def run_training(experiment_num, config_type='2pt', models=None, use_bias_correction=True,
-                 use_parity_split=False, use_multichannel=False):
-    """Train all models for an experiment.
-    
-    Args:
-        experiment_num: Experiment number
-        config_type: '2pt' or '3pt'
-        models: List of model types to train (default: all)
-        use_bias_correction: Apply bias correction
-        use_parity_split: Split even/odd timeslices for staggered fermions (two models)
-        use_multichannel: Use multichannel parity (single model with 2 channels) - PREFERRED
-    """
+def run_training(experiment_num, config_type='2pt', models=None, use_bias_correction=True):
+    """Train all models for an experiment."""
     print("\n" + "="*60)
-    mode_label = " (MULTICHANNEL)" if use_multichannel else (" (PARITY SPLIT)" if use_parity_split else "")
-    print("STEP 3: MODEL TRAINING" + mode_label)
+    print("STEP 3: MODEL TRAINING")
     print("="*60 + "\n")
     
     models = models or MODELS
@@ -96,8 +85,7 @@ def run_training(experiment_num, config_type='2pt', models=None, use_bias_correc
     
     for model_type in models:
         print("\n" + "-"*40)
-        mode_str = " with multichannel" if use_multichannel else (" with parity split" if use_parity_split else "")
-        print(f"Training {model_type.upper()}" + mode_str)
+        print(f"Training {model_type.upper()}")
         print("-"*40 + "\n")
         
         config_path = CONFIG_PATHS[model_type]
@@ -106,48 +94,14 @@ def run_training(experiment_num, config_type='2pt', models=None, use_bias_correc
             continue
         
         try:
-            if use_multichannel:
-                # Single model with 2 channels (even/odd) - PREFERRED approach
-                model, predictions, transform_info = train_multichannel_experiment(
-                    config_path=str(config_path),
-                    experiment_num=experiment_num,
-                    model_type=model_type,
-                    use_bias_correction=use_bias_correction,
-                    config_type=config_type
-                )
-                results[model_type] = {
-                    'model': model,
-                    'predictions': predictions,
-                    'transform_info': transform_info
-                }
-            elif use_parity_split:
-                even_model, odd_model, predictions, transform_info = train_parity_experiment(
-                    config_path=str(config_path),
-                    experiment_num=experiment_num,
-                    model_type=model_type,
-                    use_bias_correction=use_bias_correction,
-                    config_type=config_type
-                )
-                results[model_type] = {
-                    'even_model': even_model,
-                    'odd_model': odd_model,
-                    'predictions': predictions,
-                    'transform_info': transform_info
-                }
-            else:
-                model, metrics, predictions, bias_vector, feat_scaler, targ_scaler = train_experiment(
-                    config_path=str(config_path),
-                    experiment_num=experiment_num,
-                    model_type=model_type,
-                    use_bias_correction=use_bias_correction,
-                    config_type=config_type
-                )
-                results[model_type] = {
-                    'model': model,
-                    'metrics': metrics,
-                    'predictions': predictions,
-                    'bias_vector': bias_vector
-                }
+            model, preds_bc, preds_rm = train_model(
+                config_path=str(config_path),
+                experiment_num=experiment_num,
+                model_type=model_type,
+                config_type=config_type,
+                bias_correction=use_bias_correction
+            )
+            results[model_type] = {'model': model, 'preds_bc': preds_bc, 'preds_rm': preds_rm}
             print(f"✓ {model_type.upper()} training complete")
         except Exception as e:
             print(f"✗ {model_type.upper()} training failed: {e}")
@@ -160,18 +114,16 @@ def run_training(experiment_num, config_type='2pt', models=None, use_bias_correc
 def run_ratio_methods(experiment_num, config_type='2pt', training_results=None):
     """Verify ratio methods were applied during training."""
     print("\n" + "="*60)
-    print("STEP 4: RATIO METHODS")
+    print("STEP 4: RATIO METHODS (applied during training)")
     print("="*60 + "\n")
     
     experiment_folder = get_experiment_folder(experiment_num, config_type)
     
     for model_type in MODELS:
         ratio_path = PROJECT_ROOT / "results" / experiment_folder / model_type / "bias_corrected" / "ratio_predictions"
-        boosted_path = PROJECT_ROOT / "results" / experiment_folder / model_type / "bias_corrected" / "boosted_ratio_predictions"
         
-        if ratio_path.exists() and boosted_path.exists():
-            b = np.load(boosted_path / "boost_factor.npy")[0]
-            print(f"✓ {model_type.upper()}: RM + bRM (b={b:.4f}) applied during training")
+        if ratio_path.exists():
+            print(f"✓ {model_type.upper()}: RM applied during training")
         else:
             print(f"✗ {model_type.upper()}: ratio predictions not found")
 
@@ -204,26 +156,14 @@ def run_physics_analysis(experiment_num, config_type='2pt', clean=False):
 
 def run_full_pipeline(experiment_num, config_type='2pt', models=None, 
                       use_bias_correction=True, skip_preprocessing=False,
-                      skip_training=False, clean_plots=False, force=False,
-                      use_parity_split=False, use_multichannel=False):
-    """Run the complete experiment pipeline.
-    
-    Args:
-        use_parity_split: If True, split even/odd timeslices for staggered fermions.
-                         Trains separate models for each parity channel (legacy).
-        use_multichannel: If True, use single model with 2 channels (even/odd).
-                         This is the PREFERRED approach for staggered fermions.
-    """
+                      skip_training=False, clean_plots=False, force=False):
+    """Run the complete experiment pipeline."""
     start_time = datetime.now()
     
     print("\n" + "#"*60)
     print("#" + f"{'MLLQCD EXPERIMENT RUNNER':^58}" + "#")
     print("#"*60)
     print(f"\nExperiment: {experiment_num} ({config_type})")
-    if use_multichannel:
-        print("Mode: MULTICHANNEL PARITY (single model, 2 channels)")
-    elif use_parity_split:
-        print("Mode: PARITY SPLIT (even/odd trained separately)")
     print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     if not skip_preprocessing:
@@ -239,9 +179,7 @@ def run_full_pipeline(experiment_num, config_type='2pt', models=None,
     training_results = None
     if not skip_training:
         training_results = run_training(
-            experiment_num, config_type, models, use_bias_correction,
-            use_parity_split=use_parity_split,
-            use_multichannel=use_multichannel
+            experiment_num, config_type, models, use_bias_correction
         )
         if not training_results:
             print("Pipeline aborted: no models trained successfully")
@@ -276,10 +214,6 @@ def main():
                        choices=['cnn', 'mlp', 'gbr', 'transformer'],
                        help="Models to train (default: all)")
     parser.add_argument('--no-bias', action='store_true', help="Disable bias correction")
-    parser.add_argument('--multichannel', '--mc', action='store_true',
-                       help="Use multichannel parity (single model with 2 channels for even/odd) - PREFERRED")
-    parser.add_argument('--parity-split', '--parity', action='store_true',
-                       help="Split even/odd timeslices for staggered fermions (two models)")
     parser.add_argument('--skip-preprocessing', action='store_true')
     parser.add_argument('--skip-training', action='store_true')
     parser.add_argument('--clean', action='store_true', help="Odd timeslices only in plots")
@@ -312,9 +246,7 @@ def main():
         skip_preprocessing=args.skip_preprocessing,
         skip_training=args.skip_training,
         clean_plots=args.clean,
-        force=args.force,
-        use_parity_split=args.parity_split,
-        use_multichannel=args.multichannel
+        force=args.force
     )
 
 

@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 import numpy as np
 from pathlib import Path
-from scipy.optimize import minimize_scalar
 
 
 class BaseModel(ABC):
@@ -35,40 +34,31 @@ class BaseModel(ABC):
         """Apply bias correction: C_corr = C_pred - bias_vector."""
         return y_pred - bias_vector
 
-    def _find_optimal_boost_factor(self, y_pred, y_input, y_target, bounds=(0.5, 2.0)):
-        """Find optimal boost factor minimising MSE to target using Brent's method."""
-        pred_signs = np.sign(y_pred)
-        abs_pred, abs_input = np.abs(y_pred), np.maximum(np.abs(y_input), 1e-30)
-
-        def mse(b):
-            boosted = (abs_input ** b) * (abs_pred / (abs_input ** b + 1e-30))
-            return np.mean((boosted * pred_signs - y_target) ** 2)
-
-        return minimize_scalar(mse, bounds=bounds, method='bounded').x
-
-    def apply_boosted_ratio(self, y_pred, y_input, y_target=None, optimise=False, boost_factor=1.0):
-        """Apply boosted ratio method: C_boosted = C_input^b * (C_pred / C_input^b).
+    def apply_ratio_method(self, y_pred, y_input):
+        """Apply ratio method: C_ratio = C_pred * (C_input / <C_input>).
+        
+        This transfers high-precision statistical fluctuations from the input
+        to the ML predictions, improving the covariance structure.
         
         Args:
-            y_pred: ML predictions (low precision)
-            y_input: High precision inputs
-            y_target: Targets (required if optimise=True)
-            optimise: Find optimal boost factor
-            boost_factor: Manual factor (ignored if optimise=True)
+            y_pred: ML predictions (N, T)
+            y_input: High precision inputs (N, T)
+            y_target: Not used (kept for API compatibility)
+            optimise: Not used (kept for API compatibility)
+            boost_factor: Not used (kept for API compatibility)
         
         Returns:
-            (boosted_predictions, boost_factor_used)
+            (ratio_predictions, 1.0)
         """
-        if optimise:
-            if y_target is None:
-                raise ValueError("y_target required when optimise=True")
-            boost_factor = self._find_optimal_boost_factor(y_pred, y_input, y_target)
-
-        pred_signs = np.sign(y_pred)
-        abs_pred, abs_input = np.abs(y_pred), np.maximum(np.abs(y_input), 1e-30)
-        boosted = (abs_input ** boost_factor) * (abs_pred / (abs_input ** boost_factor + 1e-30))
+        # Mean over samples (axis=0), keeping timeslice dimension
+        input_mean = np.mean(y_input, axis=0, keepdims=True)
         
-        return boosted * pred_signs, boost_factor
+        # Ratio method: scale predictions by input/mean(input)
+        # This transfers the per-sample fluctuations to the predictions
+        ratio = y_input / (input_mean + 1e-30)
+        y_ratio = y_pred * ratio
+        
+        return y_ratio, 1.0
 
     def save_ratio_predictions(self, y_boosted, boost_factor, save_path, method='ratio'):
         """Save ratio-boosted predictions to subfolder."""
