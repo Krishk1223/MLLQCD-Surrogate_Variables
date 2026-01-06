@@ -14,3 +14,11 @@ training:
 logging:
   log_interval: 10
   save_model: true
+
+correction:
+  bias_correction: true
+  ratio_boosting: false
+  boost_factor: 1.0
+
+lattice:
+  time_extent: 96

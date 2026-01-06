@@ -30,7 +30,7 @@ class MLP(nn.Module, BaseModel):
         # Paths
         project_root = Path(__file__).parent.parent.parent.parent
         self.data_path = project_root / config['data']['input_data_path'] / experiment_folder
-        self.results_dir = project_root / 'results' / experiment_folder
+        self.results_dir = project_root / 'results' / experiment_folder / 'mlp'
         self.model_dir = project_root / 'models' / experiment_folder / 'mlp_model'
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.model_dir.mkdir(parents=True, exist_ok=True)
@@ -108,8 +108,15 @@ class MLP(nn.Module, BaseModel):
         weight_decay = self.training_config.get('weight_decay', 0.0)
         optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=weight_decay)
         
-        # Loss
-        criterion = nn.MSELoss()
+        # Loss with reduction='none' for timeslice weighting
+        criterion = nn.MSELoss(reduction='none')
+        
+        # Create timeslice weights: boost importance of t=10-40 where SNR is low
+        seq_len = self.output_dim
+        t = torch.arange(seq_len, dtype=torch.float32, device=self.device)
+        time_weights = 1.0 + 5.0 * torch.exp(-((t - 20) ** 2) / (2 * 15 ** 2))
+        time_weights = time_weights / time_weights.mean()
+        self.time_weights = time_weights.view(1, -1)  # (1, seq_len)
         
         # Tensorboard
         writer = SummaryWriter(self.results_dir / 'tensorboard_logs')
@@ -131,7 +138,8 @@ class MLP(nn.Module, BaseModel):
                 X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
                 optimizer.zero_grad()
                 output = self(X_batch)
-                loss = criterion(output, y_batch)
+                raw_loss = criterion(output, y_batch)
+                loss = (raw_loss * self.time_weights).mean()
                 loss.backward()
                 optimizer.step()
                 train_loss += loss.item()
@@ -147,7 +155,8 @@ class MLP(nn.Module, BaseModel):
                     for X_batch, y_batch in eval_loader:
                         X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
                         output = self(X_batch)
-                        eval_loss += criterion(output, y_batch).item()
+                        raw_loss = criterion(output, y_batch)
+                        eval_loss += (raw_loss * self.time_weights).mean().item()
                 eval_loss /= len(eval_loader)
                 writer.add_scalar('Loss/eval', eval_loss, epoch)
                 
@@ -190,33 +199,48 @@ class MLP(nn.Module, BaseModel):
             predictions = self(X_tensor).cpu().numpy()
         return predictions
     
-    def compute_bias_correction(self, bias_X, bias_y, target_scaler):
-        """Compute bias correction vector."""
+    def compute_bias_correction(self, bias_X, bias_y, target_scaler, target_signs=None):
+        """Compute bias correction vector in original correlator space."""
         predictions = self.predict_model(bias_X)
         predictions_unscaled = target_scaler.inverse_transform(predictions)
         targets_unscaled = target_scaler.inverse_transform(bias_y)
+        
+        # Apply inverse log transform: exp(x) * sign to get original correlator values
+        if target_signs is not None:
+            predictions_unscaled = np.exp(predictions_unscaled) * target_signs
+            targets_unscaled = np.exp(targets_unscaled) * target_signs
+        
         bias_vector = np.mean(targets_unscaled - predictions_unscaled, axis=0)
         print(f"Bias correction: mean abs = {np.mean(np.abs(bias_vector)):.6f}")
         return bias_vector
     
-    def evaluate_model(self, test_X, test_y, target_scaler, bias_vector=None, save_predictions=True):
+    def evaluate_model(self, test_X, test_y, target_scaler, bias_vector=None, 
+                       save_predictions=True, target_signs=None):
         """Evaluate model on test set."""
         predictions_scaled = self.predict_model(test_X)
         predictions = target_scaler.inverse_transform(predictions_scaled)
         targets = target_scaler.inverse_transform(test_y)
+        
+        # Apply inverse log transform: exp(x) * sign
+        if target_signs is not None:
+            predictions = np.exp(predictions) * target_signs
+            targets = np.exp(targets) * target_signs
         
         if bias_vector is not None:
             predictions = predictions + bias_vector
         
         mse = np.mean((predictions - targets) ** 2)
         mae = np.mean(np.abs(predictions - targets))
+        rel_err = np.mean(np.abs(predictions - targets) / (np.abs(targets) + 1e-30))
         
-        metrics = {'mse': float(mse), 'mae': float(mae)}
-        print(f"Test MSE: {mse:.6f}, MAE: {mae:.6f}")
+        metrics = {'mse': float(mse), 'mae': float(mae), 'rel_err': float(rel_err)}
+        print(f"Test MSE: {mse:.6f}, MAE: {mae:.6f}, RelErr: {rel_err:.4f}")
         
         if save_predictions:
             np.save(self.results_dir / 'correlator_predictions.npy', predictions)
             np.save(self.results_dir / 'test_targets.npy', targets)
+            np.save(self.results_dir / 'relative_errors.npy',
+                    np.abs(predictions - targets) / (np.abs(targets) + 1e-30))
             with open(self.results_dir / 'scaled_evaluation_metrics.json', 'w') as f:
                 json.dump(metrics, f, indent=2)
         

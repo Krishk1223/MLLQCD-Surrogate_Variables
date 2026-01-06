@@ -23,7 +23,7 @@ class GBR(BaseModel):
         # Paths
         project_root = Path(__file__).parent.parent.parent.parent
         self.data_path = project_root / config['data']['input_data_path'] / experiment_folder
-        self.results_dir = project_root / 'results' / experiment_folder
+        self.results_dir = project_root / 'results' / experiment_folder / 'gbr'
         self.model_dir = project_root / 'models' / experiment_folder / 'gbr_model'
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.model_dir.mkdir(parents=True, exist_ok=True)
@@ -86,20 +86,32 @@ class GBR(BaseModel):
             predictions[:, t] = model.predict(X)
         return predictions
     
-    def compute_bias_correction(self, bias_X, bias_y, target_scaler):
-        """Compute bias correction vector."""
+    def compute_bias_correction(self, bias_X, bias_y, target_scaler, target_signs=None):
+        """Compute bias correction vector in original correlator space."""
         predictions = self.predict_model(bias_X)
         predictions_unscaled = target_scaler.inverse_transform(predictions)
         targets_unscaled = target_scaler.inverse_transform(bias_y)
+        
+        # Apply inverse log transform: exp(x) * sign to get original correlator values
+        if target_signs is not None:
+            predictions_unscaled = np.exp(predictions_unscaled) * target_signs
+            targets_unscaled = np.exp(targets_unscaled) * target_signs
+        
         bias_vector = np.mean(targets_unscaled - predictions_unscaled, axis=0)
         print(f"Bias correction: mean abs = {np.mean(np.abs(bias_vector)):.6f}")
         return bias_vector
     
-    def evaluate_model(self, test_X, test_y, target_scaler, bias_vector=None, save_predictions=True):
+    def evaluate_model(self, test_X, test_y, target_scaler, bias_vector=None, 
+                       save_predictions=True, target_signs=None):
         """Evaluate model on test set."""
         predictions_scaled = self.predict_model(test_X)
         predictions = target_scaler.inverse_transform(predictions_scaled)
         targets = target_scaler.inverse_transform(test_y)
+        
+        # Apply inverse log transform: exp(x) * sign
+        if target_signs is not None:
+            predictions = np.exp(predictions) * target_signs
+            targets = np.exp(targets) * target_signs
         
         if bias_vector is not None:
             predictions = predictions + bias_vector
@@ -107,12 +119,17 @@ class GBR(BaseModel):
         mse = np.mean((predictions - targets) ** 2)
         mae = np.mean(np.abs(predictions - targets))
         
-        metrics = {'mse': float(mse), 'mae': float(mae)}
-        print(f"Test MSE: {mse:.6f}, MAE: {mae:.6f}")
+        # Compute relative error only where targets are significant
+        rel_err = np.mean(np.abs(predictions - targets) / (np.abs(targets) + 1e-30))
+        
+        metrics = {'mse': float(mse), 'mae': float(mae), 'rel_err': float(rel_err)}
+        print(f"Test MSE: {mse:.6f}, MAE: {mae:.6f}, RelErr: {rel_err:.4f}")
         
         if save_predictions:
             np.save(self.results_dir / 'correlator_predictions.npy', predictions)
             np.save(self.results_dir / 'test_targets.npy', targets)
+            np.save(self.results_dir / 'relative_errors.npy', 
+                    np.abs(predictions - targets) / (np.abs(targets) + 1e-30))
             with open(self.results_dir / 'scaled_evaluation_metrics.json', 'w') as f:
                 json.dump(metrics, f, indent=2)
         

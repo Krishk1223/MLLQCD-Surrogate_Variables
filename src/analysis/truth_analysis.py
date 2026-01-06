@@ -1,5 +1,9 @@
 """
 Correlator Analysis Classes for Lattice QCD 2pt Function
+STEP 1: Preliminary Analysis and Baseline Estimates for Bayesian Fitting
+Goals:
+1. Preliminary analysis: Quick sliding-window plateau estimates (baseline for fitting)
+2. Bayesian analysis: Proper lsqfit/gvar fitting with oscillating states (future)
 """
 
 import numpy as np
@@ -19,10 +23,14 @@ class CorrelatorAnalysisBase(ABC):
         self.results_path = Path(results_path)
         self.results_path.mkdir(parents=True, exist_ok=True)
         self.show_error_bars = show_error_bars
-        self.stats = {}  # {name: {'mean': array, 'err': array, ...}}
+        self.stats = {}  # {name: {'mean': array, 'err': array, 'samples': array}}
     
     def compute_effective_mass(self, name):
-        """Compute effective mass: m_eff(t) = ln(C(t)/C(t+1))"""
+        """Compute effective mass: m_eff(t) = ln(C(t)/C(t+1))
+        
+        Note: This is a simple log-ratio estimator. For staggered fermions with
+        oscillating (-1)^t terms, proper fitting with gvar/lsqfit is needed.
+        """
         if name not in self.stats:
             return np.array([np.nan]), np.array([np.nan])
         
@@ -41,11 +49,21 @@ class CorrelatorAnalysisBase(ABC):
     def find_plateau_mass(self, name, min_t=5, max_t=12, window_size=4, use_odd_only=True):
         """Find plateau by locating the most stable window of effective mass values.
         
+        This is a PRELIMINARY method using sliding windows to estimate:
+        - Approximate plateau mass
+        - Suggested t_min and t_max for proper Bayesian fitting
+        
+        For publication-quality results, use BayesianCorrelatorFitter with
+        gvar/lsqfit to properly handle correlations and oscillating states.
+        
         Args:
             name: Key in self.stats
             min_t, max_t: Time range to search
             window_size: Number of points to consider for stability
             use_odd_only: If True, use only odd timeslices (for staggered fermions)
+        
+        Returns:
+            dict with 'mass', 'error', 't_range', 'chi2_reduced', 'stability'
         """
         m_eff, m_eff_err = self.compute_effective_mass(name)
         if name not in self.stats:
@@ -89,6 +107,8 @@ class CorrelatorAnalysisBase(ABC):
         return {
             'mass': w_mean,
             'error': w_err,
+            't_min': int(plateau_times[0]),
+            't_max': int(plateau_times[-1]),
             't_range': (int(plateau_times[0]), int(plateau_times[-1])),
             'chi2_reduced': chi2,
             'stability': best_std  # Lower = more stable plateau
@@ -107,27 +127,6 @@ class CorrelatorAnalysisBase(ABC):
                        fmt=style, label=label or name, capsize=3, color=color)
         else:
             ax.plot(t[mask], np.log10(mean[mask]), style, label=label or name, color=color)
-    
-    def _plot_effective_mass_data(self, ax, name, style, color, label=None):
-        """Plot effective mass with plateau."""
-        if name not in self.stats:
-            return
-        
-        m_eff, m_eff_err = self.compute_effective_mass(name)
-        t = np.arange(len(m_eff))
-        mask = np.isfinite(m_eff)
-        
-        if self.show_error_bars:
-            ax.errorbar(t[mask], m_eff[mask], yerr=m_eff_err[mask], fmt=style,
-                       label=label or name, capsize=3, color=color)
-        else:
-            ax.plot(t[mask], m_eff[mask], style, label=label or name, color=color)
-        
-        # Draw plateau
-        p = self.find_plateau_mass(name)
-        if p['t_range'] and not np.isnan(p['mass']):
-            ax.axhline(p['mass'], color=color, ls='--', alpha=0.7)
-            ax.axhspan(p['mass']-p['error'], p['mass']+p['error'], alpha=0.15, color=color)
 
     @abstractmethod
     def load_data(self):
@@ -140,13 +139,18 @@ class CorrelatorAnalysisBase(ABC):
         pass
 
 
-class TruthAnalysis(CorrelatorAnalysisBase):
-    """Analyze truth data from averaged CSV files."""
+class TruthAnalysis2pt(CorrelatorAnalysisBase):
+    """Preliminary analysis of truth data from averaged CSV files.
     
-    def __init__(self, processed_data_path, jackknife_errors_path, results_path, show_error_bars=False):
+    Generates baseline estimates for plateau mass, t_min, t_max which
+    can be used as starting points for Bayesian fitting with lsqfit/gvar.
+    """
+    
+    def __init__(self, processed_data_path, jackknife_errors_path, jackknife_samples_path, results_path, show_error_bars=False):
         super().__init__(results_path, show_error_bars)
         self.processed_data_path = Path(processed_data_path)
         self.jackknife_errors_path = Path(jackknife_errors_path)
+        self.jackknife_samples_path = Path(jackknife_samples_path)
     
     def load_data(self):
         """Load averaged 2pt correlator CSV files and jackknife errors."""
@@ -168,14 +172,21 @@ class TruthAnalysis(CorrelatorAnalysisBase):
             
             # Load jackknife errors or estimate
             error_file = self.jackknife_errors_path / f"{ensemble_name}_jackknife_error.npy"
-            err = np.load(error_file) if error_file.exists() else 0.01 * np.abs(mean)
+            err = np.load(error_file) if error_file.exists() else np.zeros_like(mean)
+            
+            # Load jackknife samples
+            samples_file = self.jackknife_samples_path / f"{ensemble_name}_jackknife_samples.npy"
+            samples = np.load(samples_file) if samples_file.exists() else None
             
             self.stats[ensemble_name] = {
-                'mean': mean, 'err': err, 'n_timeslices': len(mean)
+                'mean': mean, 
+                'err': err, 
+                'n_timeslices': len(mean), 
+                'samples': samples
             }
         
         return len(self.stats) > 0
-    
+
     def _is_2pt_correlator(self, filepath):
         """Check if file contains 2pt correlator data."""
         name = filepath.name.lower()
@@ -196,66 +207,101 @@ class TruthAnalysis(CorrelatorAnalysisBase):
         ax.grid(True, alpha=0.3)
         plt.savefig(self.results_path / f"log_correlator_{ensemble_name or 'all'}.png", dpi=150)
         plt.close()
-    
-    def plot_effective_mass(self, ensemble_name=None):
-        """Plot effective mass."""
-        ensembles = [ensemble_name] if ensemble_name else list(self.stats.keys())
-        fig, ax = plt.subplots(figsize=(10, 6))
         
-        for i, name in enumerate(ensembles):
-            self._plot_effective_mass_data(ax, name, 'o-', f'C{i}')
+    def generate_preliminary_report(self):
+        """Generate preliminary analysis report with baseline estimates.
         
-        ax.set(xlabel='τ', ylabel='$m_{eff}$', title='Effective Mass')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        plt.savefig(self.results_path / f"effective_mass_{ensemble_name or 'all'}.png", dpi=150)
-        plt.close()
-    
-    def generate_report(self):
-        """Generate summary report."""
-        lines = ["=" * 100, "2PT CORRELATOR PLATEAU MASS ANALYSIS", "=" * 100, ""]
+        This provides starting values for proper Bayesian fitting:
+        - Approximate plateau mass (initial guess for ground state mass)
+        - Suggested t_min, t_max (fit range for lsqfit)
+        - Stability metric (lower = more reliable estimate)
+        """
+        lines = [
+            "=" * 100,
+            "PRELIMINARY 2PT CORRELATOR ANALYSIS",
+            "=" * 100,
+            "",
+            "NOTE: These are APPROXIMATE values from sliding-window analysis.",
+            "Use these as starting points for Bayesian fitting with lsqfit/gvar.",
+            "Proper fits will account for excited states and (-1)^t oscillations.",
+            "",
+            "-" * 100,
+            f"{'Ensemble':<40} {'Mass':>12} {'Error':>12} {'t_min':>8} {'t_max':>8} {'χ²/dof':>10} {'Stability':>12}",
+            "-" * 100,
+        ]
         
-        for name in self.stats:
+        # Store results for later use
+        preliminary_results = {}
+        
+        for name in sorted(self.stats.keys()):
             plateau = self.find_plateau_mass(name)
+            preliminary_results[name] = plateau
+            
             if plateau['t_range'] and not np.isnan(plateau['mass']):
-                t0, t1 = plateau['t_range']
-                lines.append(f"{name}: m = {plateau['mass']:.4f} ± {plateau['error']:.4f}, "
-                           f"τ = {t0}-{t1}, χ²/dof = {plateau['chi2_reduced']:.2f}")
+                lines.append(
+                    f"{name:<40} {plateau['mass']:>12.6f} {plateau['error']:>12.6f} "
+                    f"{plateau['t_min']:>8d} {plateau['t_max']:>8d} "
+                    f"{plateau['chi2_reduced']:>10.3f} {plateau['stability']:>12.6f}"
+                )
             else:
-                lines.append(f"{name}: No plateau found")
+                lines.append(f"{name:<40} {'No plateau found':<60}")
         
-        lines.extend(["", "=" * 100])
+        lines.extend([
+            "",
+            "-" * 100,
+            "",
+            "RECOMMENDED NEXT STEPS:",
+            "  1. Use t_min, t_max as initial fit range for lsqfit",
+            "  2. Use 'Mass' as initial guess for ground state mass prior",
+            "  3. Include oscillating state: C(t) = A*exp(-m*t) + (-1)^t * Ao*exp(-mo*t)",
+            "  4. Iterate on fit range based on fit quality (Q-value, chi2/dof)",
+            "",
+            "=" * 100
+        ])
+        
         report = "\n".join(lines)
         
-        with open(self.results_path / "truth_analysis_report.txt", 'w') as f:
+        # Save report
+        with open(self.results_path / "preliminary_analysis.txt", 'w') as f:
             f.write(report)
+        
+        # Also save as npz file for easy loading in physics analysis:
+        np.savez(
+            self.results_path / "preliminary_analysis_data.npz",
+            **{name: np.array([
+                plateau['mass'], 
+                plateau['error'], 
+                plateau.get('t_min', np.nan), 
+                plateau.get('t_max', np.nan),
+                plateau['chi2_reduced'],
+                plateau.get('stability', np.nan)
+            ]) for name, plateau in preliminary_results.items()}
+        )
+        
         print(report)
-        return report
+        return preliminary_results
     
     def run_analysis(self):
-        """Run complete truth analysis."""
+        """Run preliminary truth analysis."""
         if not self.load_data():
             print("No data loaded")
             return False
         
+        # Generate log correlator plots (useful for visual inspection)
         for name in self.stats:
             self.plot_log_correlator(name)
-            self.plot_effective_mass(name)
-            plateau = self.find_plateau_mass(name)
-            if plateau['t_range'] and not np.isnan(plateau['mass']):
-                t0, t1 = plateau['t_range']
-                print(f"{name}: m = {plateau['mass']:.4f} ± {plateau['error']:.4f}, "
-                      f"τ = {t0}-{t1}, χ²/dof = {plateau['chi2_reduced']:.2f}")
         
         if len(self.stats) > 1:
             self.plot_log_correlator()
-            self.plot_effective_mass()
         
-        self.generate_report()
-        return True
+        # Generate preliminary report with baseline estimates
+        results = self.generate_preliminary_report()
+        
+        print(f"\nPlots and report saved to: {self.results_path}")
+        return results
 
 
-class MLCorrelatorAnalysis(CorrelatorAnalysisBase):
+class MLCorrelatorAnalysis2pt(CorrelatorAnalysisBase):
     """Compare ML predictions to truth data."""
     
     def __init__(self, experiment_folder, truth_correlator_name=None, show_error_bars=False):
@@ -310,7 +356,14 @@ class MLCorrelatorAnalysis(CorrelatorAnalysisBase):
         
         if scalers_path:
             scalers = np.load(scalers_path)
-            if 'arcsinh_target_scale' in scalers:
+            if 'target_signs' in scalers:
+                signs = scalers['target_signs']
+                self.predictions = np.exp(self.predictions) * signs
+                self.targets = np.exp(self.targets) * signs
+                print(f"Applied exp inverse transform with signs")
+                return
+            elif 'arcsinh_target_scale' in scalers:
+                # Legacy support for old arcsinh transform
                 scale = float(scalers['arcsinh_target_scale'])
                 self.predictions = np.sinh(self.predictions) * scale
                 self.targets = np.sinh(self.targets) * scale
@@ -377,22 +430,8 @@ class MLCorrelatorAnalysis(CorrelatorAnalysisBase):
         plt.savefig(self.results_path / "log_correlator_comparison.png", dpi=150)
         plt.close()
     
-    def plot_effective_mass(self):
-        """Plot effective mass: ML vs Truth."""
-        fig, ax = plt.subplots(figsize=(10, 6))
-        
-        self._plot_effective_mass_data(ax, 'ml', 'o-', 'blue', 'ML')
-        if 'truth' in self.stats:
-            self._plot_effective_mass_data(ax, 'truth', 's-', 'green', 'Truth')
-        
-        ax.set(xlabel='τ', ylabel='$m_{eff}$', title='Effective Mass Comparison', xlim=(-0.5, 25), ylim=(0, 1))
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        plt.savefig(self.results_path / "effective_mass_comparison.png", dpi=150)
-        plt.close()
-    
-    def generate_report(self):
-        """Generate comparison report."""
+    def generate_preliminary_report(self):
+        """Generate preliminary comparison report."""
         p_ml = self.find_plateau_mass('ml')
         p_test = self.find_plateau_mass('test_targets')
         p_truth = self.find_plateau_mass('truth') if 'truth' in self.stats else None
@@ -402,47 +441,79 @@ class MLCorrelatorAnalysis(CorrelatorAnalysisBase):
         mae = np.mean(np.abs(self.stats['ml']['mean'] - self.stats['test_targets']['mean']))
         
         lines = [
-            "=" * 80, f"ML CORRELATOR ANALYSIS - {self.experiment_name}", "=" * 80,
-            f"Configs: {self.stats['ml']['n_configs']}, Timeslices: {self.stats['ml']['n_timeslices']}", "",
-            "PLATEAU MASSES:", "-" * 40
+            "=" * 100,
+            f"PRELIMINARY ML CORRELATOR ANALYSIS - {self.experiment_name}",
+            "=" * 100,
+            "",
+            "NOTE: Plateau masses are APPROXIMATE (sliding-window method).",
+            "Use these as starting points for proper Bayesian fitting.",
+            "",
+            f"Configs: {self.stats['ml']['n_configs']}, Timeslices: {self.stats['ml']['n_timeslices']}",
+            "",
+            "-" * 100,
+            f"{'Source':<20} {'Mass':>12} {'Error':>12} {'t_min':>8} {'t_max':>8} {'χ²/dof':>10}",
+            "-" * 100,
         ]
         
-        for name, p in [('ML', p_ml), ('Test Targets', p_test), ('Actual Truth', p_truth)]:
+        for name, p in [('ML Prediction', p_ml), ('Test Targets', p_test), ('Actual Truth', p_truth)]:
             if p and p['t_range'] and not np.isnan(p['mass']):
-                lines.append(f"{name}: m = {p['mass']:.6f} ± {p['error']:.6f}, "
-                           f"τ = {p['t_range'][0]}-{p['t_range'][1]}, χ²/dof = {p['chi2_reduced']:.3f}")
+                lines.append(
+                    f"{name:<20} {p['mass']:>12.6f} {p['error']:>12.6f} "
+                    f"{p['t_min']:>8d} {p['t_max']:>8d} {p['chi2_reduced']:>10.3f}"
+                )
+            elif p:
+                lines.append(f"{name:<20} {'No plateau found':<50}")
         
         # Comparisons
+        lines.extend(["", "-" * 100, "COMPARISONS:", "-" * 100])
+        
         def compare(name1, p1, name2, p2):
             if p1 and p2 and not np.isnan(p1['mass']) and not np.isnan(p2['mass']):
                 diff = p1['mass'] - p2['mass']
                 rel = (diff / p2['mass']) * 100
                 sigma = abs(diff) / np.sqrt(p1['error']**2 + p2['error']**2)
-                return f"{name1} vs {name2}: {diff:.6f} ({rel:+.2f}%), {sigma:.2f}σ"
+                return f"  {name1} vs {name2}: Δm = {diff:+.6f} ({rel:+.2f}%), {sigma:.2f}σ tension"
             return None
         
-        lines.append("")
         if c := compare('ML', p_ml, 'Test Targets', p_test): lines.append(c)
-        if c := compare('ML', p_ml, 'Actual Truth', p_truth): lines.append(c)
+        if c := compare('ML', p_ml, 'Truth', p_truth): lines.append(c)
+        if c := compare('Test Targets', p_test, 'Truth', p_truth): lines.append(c)
         
-        lines.extend(["", "CORRELATOR METRICS (ML vs Test Targets):", "-" * 40,
-                     f"MSE: {mse:.6e}, MAE: {mae:.6e}", "=" * 80])
+        lines.extend([
+            "",
+            "-" * 100,
+            "CORRELATOR METRICS (ML vs Test Targets):",
+            "-" * 100,
+            f"  MSE: {mse:.6e}",
+            f"  MAE: {mae:.6e}",
+            "",
+            "=" * 100
+        ])
         
         report = "\n".join(lines)
-        with open(self.results_path / "comparison_report.txt", 'w') as f:
+        with open(self.results_path / "preliminary_analysis.txt", 'w') as f:
             f.write(report)
         print(report)
         return report
     
     def run_analysis(self):
-        """Run complete ML analysis."""
+        """Run preliminary ML analysis."""
         self.load_data()
         print("\nGenerating comparison plots.")
         self.plot_log_correlator()
-        self.plot_effective_mass()
         print(f"Plots saved to: {self.results_path}")
-        self.generate_report()
+        self.generate_preliminary_report()
         return True
+
+
+class MLCorrelatorAnalysis3pt(CorrelatorAnalysisBase):
+    """Placeholder for 3pt correlator analysis."""
+    
+    def load_data(self):
+        raise NotImplementedError("3pt analysis not yet implemented")
+    
+    def run_analysis(self):
+        raise NotImplementedError("3pt analysis not yet implemented")
 
 
 def main():
@@ -458,20 +529,27 @@ def main():
             truth_idx = sys.argv.index('--truth')
             truth_name = sys.argv[truth_idx + 1] if len(sys.argv) > truth_idx + 1 else None
         
-        print(f"Running ML Analysis: {experiment}")
-        return MLCorrelatorAnalysis(experiment, truth_name, show_errors).run_analysis()
+        print(f"Running Preliminary ML Analysis: {experiment}")
+        return MLCorrelatorAnalysis2pt(experiment, truth_name, show_errors).run_analysis()
     
     # Truth analysis mode
     averaged_path = project_root / "data" / "processed" / "averaged_data"
-    jackknife_path = project_root / "data" / "processed" / "jackknife_errors"
+    jackknife_errors_path = project_root / "data" / "processed" / "jackknife_errors"
+    jackknife_samples_path = project_root / "data" / "processed" / "jackknife_samples"
     results_path = project_root / "results" / "truth_analysis"
     show_errors = '--error-bars' in sys.argv or '-e' in sys.argv
     
-    print("2PT CORRELATOR TRUTH ANALYSIS")
+    print("PRELIMINARY 2PT CORRELATOR ANALYSIS")
     print(f"Found {len(list(averaged_path.glob('*_averaged.csv')))} datasets")
     
-    return TruthAnalysis(averaged_path, jackknife_path, results_path, show_errors).run_analysis()
+    return TruthAnalysis2pt(
+        averaged_path, 
+        jackknife_errors_path, 
+        jackknife_samples_path,
+        results_path, 
+        show_errors
+    ).run_analysis()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(0 if main() else 1)

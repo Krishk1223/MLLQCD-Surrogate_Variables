@@ -12,7 +12,7 @@ from typing import Optional
 
 
 class CNN(nn.Module, BaseModel):
-    def __init__(self, config, experiment_folder, input_channels=1):
+    def __init__(self, config, experiment_folder, input_channels=1, output_channels=None):
         """
         1D Convolutional Neural Network for sequence-to-sequence regression.
         
@@ -20,6 +20,7 @@ class CNN(nn.Module, BaseModel):
             config: Configuration dictionary
             experiment_folder: Name of experiment folder
             input_channels: Number of input channels/sequences (default 1)
+            output_channels: Number of output channels (default: same as input_channels)
         """
         nn.Module.__init__(self)
         BaseModel.__init__(self, config)
@@ -30,6 +31,10 @@ class CNN(nn.Module, BaseModel):
         self.training_config = config['training']
         self.logging_config = config['logging']
         self.device = None
+        
+        # Output channels default to same as input (for parity: 2 in -> 2 out)
+        if output_channels is None:
+            output_channels = input_channels
 
         # Device setup
         if torch.cuda.is_available():
@@ -42,13 +47,14 @@ class CNN(nn.Module, BaseModel):
         # Project root and paths
         project_root = Path(__file__).parent.parent.parent.parent
         self.data_path = project_root / self.config['data']['input_data_path'] / experiment_folder
-        self.results_dir = project_root / 'results' / experiment_folder
+        self.results_dir = project_root / 'results' / experiment_folder / 'cnn'
         self.model_dir = project_root / 'models' / experiment_folder / 'cnn_model'
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
         # CNN architecture parameters
         self.input_channels = input_channels
+        self.output_channels = output_channels
         self.hidden_channels = self.model_config.get('hidden_channels', [64, 128, 64])
         self.kernel_sizes = self.model_config.get('kernel_sizes', [5, 3, 3])
         self.dropout_rate = self.model_config.get('dropout', 0.2)
@@ -60,21 +66,21 @@ class CNN(nn.Module, BaseModel):
         self.dropout = nn.Dropout(self.dropout_rate)
         
         in_channels = self.input_channels
-        for i, (out_channels, kernel_size) in enumerate(zip(self.hidden_channels, self.kernel_sizes)):
+        for i, (out_ch, kernel_size) in enumerate(zip(self.hidden_channels, self.kernel_sizes)):
             # Padding to maintain sequence length (same padding)
             padding = kernel_size // 2
             self.conv_layers.append(
-                nn.Conv1d(in_channels, out_channels, kernel_size, padding=padding)
+                nn.Conv1d(in_channels, out_ch, kernel_size, padding=padding)
             )
             if self.use_batch_norm:
-                self.bn_layers.append(nn.BatchNorm1d(out_channels))
-            in_channels = out_channels
+                self.bn_layers.append(nn.BatchNorm1d(out_ch))
+            in_channels = out_ch
         
         # Activation
         self.activation = nn.LeakyReLU()
         
-        # Output projection: map from hidden_channels[-1] back to 1 channel
-        self.output_conv = nn.Conv1d(self.hidden_channels[-1], 1, kernel_size=1)
+        # Output projection: map from hidden_channels[-1] to output_channels
+        self.output_conv = nn.Conv1d(self.hidden_channels[-1], self.output_channels, kernel_size=1)
         
         self.is_built = True
 
@@ -137,13 +143,23 @@ class CNN(nn.Module, BaseModel):
                 weight_decay=self.training_config['weight_decay']
             )
 
-        # Loss function
+        # Loss function - use reduction='none' for timeslice weighting
         if self.training_config['loss_function'] == 'HuberLoss':
-            criterion = nn.HuberLoss()
+            criterion = nn.HuberLoss(reduction='none')
         elif self.training_config['loss_function'] == 'MAE':
-            criterion = nn.L1Loss()
+            criterion = nn.L1Loss(reduction='none')
         else:
-            criterion = nn.MSELoss()
+            criterion = nn.MSELoss(reduction='none')
+
+        # Get sequence length from first batch
+        sample_batch = next(iter(trainloader))
+        seq_len = sample_batch['features'].shape[1]
+        
+        # Create timeslice weights: boost importance of t=10-40 where SNR is low but non-zero
+        t = torch.arange(seq_len, dtype=torch.float32, device=self.device)
+        time_weights = 1.0 + 5.0 * torch.exp(-((t - 20) ** 2) / (2 * 15 ** 2))
+        time_weights = time_weights / time_weights.mean()
+        self.time_weights = time_weights.view(1, -1, 1)
 
         # LR scheduler
         scheduler = None
@@ -211,10 +227,15 @@ class CNN(nn.Module, BaseModel):
                 optimiser.zero_grad()
                 predictions = self.forward(inputs)
                 
-                value_loss = criterion(predictions, targets)
+                # Apply timeslice weights
+                raw_loss = criterion(predictions, targets)
+                seq_len = predictions.shape[1]
+                weights = self.time_weights[:, :seq_len, :]
+                value_loss = (raw_loss * weights).mean()
+                
                 pred_derivative = predictions[:, 1:, :] - predictions[:, :-1, :]
                 target_derivative = targets[:, 1:, :] - targets[:, :-1, :]
-                slope_loss = criterion(pred_derivative, target_derivative)
+                slope_loss = criterion(pred_derivative, target_derivative).mean()
                 loss = value_loss + 2.0 * slope_loss
 
                 loss.backward()
@@ -233,7 +254,9 @@ class CNN(nn.Module, BaseModel):
                     inputs = batch_data['features'].to(self.device)
                     targets = batch_data['targets'].to(self.device)
                     predictions = self.forward(inputs)
-                    loss = criterion(predictions, targets)
+                    seq_len = predictions.shape[1]
+                    weights = self.time_weights[:, :seq_len, :]
+                    loss = (criterion(predictions, targets) * weights).mean()
                     total_val_loss += loss.item()
 
             avg_val_loss = total_val_loss / len(eval_loader)
@@ -300,15 +323,17 @@ class CNN(nn.Module, BaseModel):
         print(f"Training completed.")
         print(f"TensorBoard logs saved to: {writer_dir}")
     
-    def compute_bias_correction(self, biasloader, target_scaler: StandardScaler):
+    def compute_bias_correction(self, biasloader, target_scaler: StandardScaler,
+                                   target_signs: Optional[np.ndarray] = None):
         """Compute bias correction vector from bias correction dataset.
         
         Args:
             biasloader: DataLoader for bias correction dataset
             target_scaler: Fitted StandardScaler for inverse transform
+            target_signs: Signs array for inverse log transform (exp(x) * sign)
             
         Returns:
-            bias_vector: Array of shape (seq_len,) with bias per time step
+            bias_vector: Array of shape (seq_len,) with bias per time step in original space
         """
         if not self.is_trained:
             raise ValueError("Model must be trained before computing bias correction.")
@@ -340,14 +365,19 @@ class CNN(nn.Module, BaseModel):
         predictions = predictions.squeeze(-1)
         targets = targets.squeeze(-1)
         
-        # Inverse scaling to get real correlator values
+        # Inverse scaling (StandardScaler) to get log-transformed values
         n_configs, seq_len = predictions.shape
         predictions_unscaled = target_scaler.inverse_transform(predictions.reshape(-1, 1))
         predictions_unscaled = predictions_unscaled.reshape(n_configs, seq_len)
         targets_unscaled = target_scaler.inverse_transform(targets.reshape(-1, 1))
         targets_unscaled = targets_unscaled.reshape(n_configs, seq_len)
         
-        # Compute bias: average residual across all configs
+        # Apply inverse log transform: exp(x) * sign to get original correlator values
+        if target_signs is not None:
+            predictions_unscaled = np.exp(predictions_unscaled) * target_signs
+            targets_unscaled = np.exp(targets_unscaled) * target_signs
+        
+        # Compute bias: average residual across all configs (now in original correlator space)
         bias_vector = np.mean(predictions_unscaled - targets_unscaled, axis=0)  # Shape: (seq_len,)
         
         # Save bias correction vector
@@ -420,7 +450,8 @@ class CNN(nn.Module, BaseModel):
         return all_predictions
 
     def evaluate_model(self, testloader, target_scaler: Optional[StandardScaler] = None, 
-                        bias_vector: Optional[np.ndarray] = None, save_predictions=True):
+                        bias_vector: Optional[np.ndarray] = None, save_predictions=True,
+                        target_signs: Optional[np.ndarray] = None):
         """Evaluate model on test data and compute metrics.
         
         Args:
@@ -429,6 +460,7 @@ class CNN(nn.Module, BaseModel):
             bias_vector: Pre-computed bias correction vector of shape (seq_len,). If provided,
                          predictions will be bias-corrected before computing metrics.
             save_predictions: Whether to save predictions to disk
+            target_signs: Signs array for inverse log transform (exp(x) * sign)
             
         Returns:
             If unscaled: (scaled_metrics, mean_relative_error, predictions, relative_errors)
@@ -490,6 +522,11 @@ class CNN(nn.Module, BaseModel):
             predictions = predictions.reshape(n_configs, seq_len)
             targets = target_scaler.inverse_transform(targets.reshape(-1, 1))
             targets = targets.reshape(n_configs, seq_len)
+
+            # Apply inverse log transform: exp(x) * sign
+            if target_signs is not None:
+                predictions = np.exp(predictions) * target_signs
+                targets = np.exp(targets) * target_signs
 
             # Apply bias correction if provided
             if bias_vector is not None:

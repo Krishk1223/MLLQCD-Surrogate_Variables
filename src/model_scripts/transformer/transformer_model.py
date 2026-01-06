@@ -16,7 +16,7 @@ from typing import Optional
 
 
 class Transformer(nn.Module, BaseModel):
-    def __init__(self, config, experiment_folder, input_dim=1, num_layers=None):
+    def __init__(self, config, experiment_folder, input_dim=1, output_dim=None, num_layers=None):
         nn.Module.__init__(self)
         BaseModel.__init__(self, config)
 
@@ -38,7 +38,7 @@ class Transformer(nn.Module, BaseModel):
         #project root and data path:
         project_root = Path(__file__).parent.parent.parent.parent 
         self.data_path = project_root / self.config['data']['input_data_path'] / experiment_folder
-        self.results_dir = project_root / 'results' / experiment_folder
+        self.results_dir = project_root / 'results' / experiment_folder / 'transformer'
         self.model_dir = project_root / 'models' / experiment_folder / 'transformer_model'
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.model_dir.mkdir(parents=True, exist_ok=True)
@@ -46,6 +46,10 @@ class Transformer(nn.Module, BaseModel):
         # Determine number of layers
         if num_layers is None:
             num_layers = self.model_config.get('num_layers', 2)
+            
+        # Determine output_dim: use parameter if provided, else config default
+        if output_dim is None:
+            output_dim = self.model_config['regression_head']['output_dim']
 
         #Component initialisation
         self.input_embed = InputEmbedding(
@@ -67,7 +71,7 @@ class Transformer(nn.Module, BaseModel):
         ])
         self.regressor_head = RegressionHead(
             self.model_config['d_model'],
-            self.model_config['regression_head']['output_dim'])
+            output_dim)
 
         self.is_built = True
 
@@ -115,11 +119,19 @@ class Transformer(nn.Module, BaseModel):
 
         #Loss function:
         if self.training_config['loss_function'] == 'HuberLoss':
-            criterion = nn.HuberLoss()
+            criterion = nn.HuberLoss(reduction='none')
         elif self.training_config['loss_function'] == 'MAE':
-            criterion = nn.L1Loss()
+            criterion = nn.L1Loss(reduction='none')
         else:
-            criterion = nn.MSELoss() #default
+            criterion = nn.MSELoss(reduction='none')
+        
+        # Create timeslice weights: boost importance of t=10-40 where SNR is low but non-zero
+        seq_len = self.model_config['max_len']
+        t = torch.arange(seq_len, dtype=torch.float32, device=self.device)
+        # Gaussian-like weighting centered at t=20, plus baseline
+        time_weights = 1.0 + 5.0 * torch.exp(-((t - 20) ** 2) / (2 * 15 ** 2))
+        time_weights = time_weights / time_weights.mean()  # normalize
+        self.time_weights = time_weights.view(1, -1, 1)  # (1, seq_len, 1)
         
         #LR scheduler for faster convergence:
         if not self.training_config['scheduler']['use_scheduler']:
@@ -193,10 +205,15 @@ class Transformer(nn.Module, BaseModel):
                 #Forward pass:
                 predictions = self.forward(inputs)
                 
-                value_loss = criterion(predictions, targets)
+                # Apply timeslice weights to loss
+                raw_loss = criterion(predictions, targets)
+                seq_len = predictions.shape[1]
+                weights = self.time_weights[:, :seq_len, :]
+                value_loss = (raw_loss * weights).mean()
+                
                 pred_derivative = predictions[:, 1:, :] - predictions[:, :-1, :]
                 target_derivative = targets[:, 1:, :] - targets[:, :-1, :]
-                slope_loss = criterion(pred_derivative, target_derivative)
+                slope_loss = criterion(pred_derivative, target_derivative).mean()
                 loss = value_loss + 2.0 * slope_loss
 
                 #Backprop:
@@ -219,7 +236,9 @@ class Transformer(nn.Module, BaseModel):
                     targets = batch_data['targets'].to(self.device)
 
                     predictions = self.forward(inputs)
-                    loss = criterion(predictions, targets)
+                    seq_len = predictions.shape[1]
+                    weights = self.time_weights[:, :seq_len, :]
+                    loss = (criterion(predictions, targets) * weights).mean()
                     total_val_loss += loss.item()
             avg_val_loss = total_val_loss / len(eval_loader)
             
@@ -289,15 +308,17 @@ class Transformer(nn.Module, BaseModel):
         print(f"Training completed.")
         print(f"TensorBoard logs saved to: {writer_dir}")
 
-    def compute_bias_correction(self, biasloader, target_scaler: StandardScaler):
+    def compute_bias_correction(self, biasloader, target_scaler: StandardScaler, 
+                                   target_signs: Optional[np.ndarray] = None):
         """Compute bias correction vector from bias correction dataset.
         
         Args:
             biasloader: DataLoader for bias correction dataset
             target_scaler: Fitted StandardScaler for inverse transform
+            target_signs: Signs array for inverse log transform (exp(x) * sign)
             
         Returns:
-            bias_vector: Array of shape (seq_len,) with bias per time step
+            bias_vector: Array of shape (seq_len,) with bias per time step in original space
         """
         if not self.is_trained:
             raise ValueError("Model must be trained before computing bias correction.")
@@ -329,14 +350,19 @@ class Transformer(nn.Module, BaseModel):
         predictions = predictions.squeeze(-1)
         targets = targets.squeeze(-1)
         
-        # Inverse scaling to get real correlator values
+        # Inverse scaling (StandardScaler) to get log-transformed values
         n_configs, seq_len = predictions.shape
         predictions_unscaled = target_scaler.inverse_transform(predictions.reshape(-1, 1))
         predictions_unscaled = predictions_unscaled.reshape(n_configs, seq_len)
         targets_unscaled = target_scaler.inverse_transform(targets.reshape(-1, 1))
         targets_unscaled = targets_unscaled.reshape(n_configs, seq_len)
         
-        # Compute bias: average residual across all configs
+        # Apply inverse log transform: exp(x) * sign to get original correlator values
+        if target_signs is not None:
+            predictions_unscaled = np.exp(predictions_unscaled) * target_signs
+            targets_unscaled = np.exp(targets_unscaled) * target_signs
+        
+        # Compute bias: average residual across all configs (now in original correlator space)
         bias_vector = np.mean(predictions_unscaled - targets_unscaled, axis=0)  # Shape: (seq_len,)
         
         # Save bias correction vector
@@ -410,7 +436,8 @@ class Transformer(nn.Module, BaseModel):
         return all_predictions
 
     def evaluate_model(self, testloader, target_scaler:Optional[StandardScaler]=None, 
-                        bias_vector: Optional[np.ndarray]=None, save_predictions=True):
+                        bias_vector: Optional[np.ndarray]=None, save_predictions=True,
+                        target_signs: Optional[np.ndarray]=None):
         """Evaluates testing data and computes metrics. Also saves metrics and predictions.
         
         Args:
@@ -419,6 +446,7 @@ class Transformer(nn.Module, BaseModel):
             bias_vector: Pre-computed bias correction vector of shape (seq_len,). If provided,
                          predictions will be bias-corrected before computing metrics.
             save_predictions: Whether to save predictions to disk
+            target_signs: Signs array for inverse log transform (exp(x) * signs)
             
         Returns:
             If unscaled: (scaled_metrics, mean_relative_error, predictions, relative_errors)
@@ -480,6 +508,11 @@ class Transformer(nn.Module, BaseModel):
             predictions = predictions.reshape(n_configs, seq_len)
             targets = target_scaler.inverse_transform(targets.reshape(-1, 1))
             targets = targets.reshape(n_configs, seq_len)
+            
+            # Apply inverse log transform: exp(x) * signs
+            if target_signs is not None:
+                predictions = np.exp(predictions) * target_signs
+                targets = np.exp(targets) * target_signs
             
             # Apply bias correction if provided
             if bias_vector is not None:

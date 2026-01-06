@@ -42,3 +42,11 @@ logging:
   save_model: true
   save_best_model: true
   save_final_model: false
+
+correction:
+  bias_correction: true
+  ratio_boosting: false
+  boost_factor: 1.0
+
+lattice:
+  time_extent: 96
