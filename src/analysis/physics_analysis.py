@@ -299,6 +299,55 @@ class TwoPointReport:
             table.set_fontsize(10)
             table.scale(1.2, 2.0)
     
+    def _results_table(self, pdf):
+        """Page 5: Results table with all parameters."""
+        fig, ax = plt.subplots(figsize=(11, 8))
+        ax.axis('off')
+        ax.set_title('Fit Results Summary', fontsize=16, fontweight='bold')
+        
+        headers = ['Model', 'Method', 'dE0', 'dE1', 'a0', 'a1', 'χ²/dof', 'Q']
+        rows = []
+        
+        def fmt(g):
+            return f"{gv.mean(g):.4f}({gv.sdev(g)*1e4:.0f})" if gv.sdev(g) > 0 else f"{gv.mean(g):.4f}"
+        
+        for name, fit in self.fits.items():
+            if fit is None:
+                continue
+            p = fit.p
+            chi2 = fit.chi2 / fit.dof if fit.dof > 0 else 0
+            Q = fit.Q if hasattr(fit, 'Q') else 0
+            
+            dE0 = p['log(dE)'][0] if 'log(dE)' in p else p.get('dE', [gv.gvar(0,0)])[0]
+            dE1 = p['log(dE)'][1] if 'log(dE)' in p and len(p['log(dE)']) > 1 else gv.gvar(0,0)
+            a0 = p['log(a)'][0] if 'log(a)' in p else p.get('a', [gv.gvar(0,0)])[0]
+            a1 = p['log(a)'][1] if 'log(a)' in p and len(p['log(a)']) > 1 else gv.gvar(0,0)
+            
+            # Convert from log if needed
+            if 'log(dE)' in p:
+                dE0, dE1 = np.exp(dE0), np.exp(dE1)
+                a0, a1 = np.exp(a0), np.exp(a1)
+            
+            if name == 'truth':
+                rows.append(['Truth', '-', fmt(dE0), fmt(dE1), fmt(a0), fmt(a1), f'{chi2:.3f}', f'{Q:.3f}'])
+            else:
+                parts = name.split('_')
+                model, method = parts[0].upper(), parts[1].upper() if len(parts) > 1 else 'BC'
+                rows.append([model, method, fmt(dE0), fmt(dE1), fmt(a0), fmt(a1), f'{chi2:.3f}', f'{Q:.3f}'])
+        
+        table = ax.table(cellText=rows, colLabels=headers, loc='center', cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1.2, 1.8)
+        
+        for i in range(len(headers)):
+            table[(0, i)].set_facecolor('#4472C4')
+            table[(0, i)].set_text_props(color='white', fontweight='bold')
+        
+        plt.tight_layout()
+        pdf.savefig(fig, bbox_inches='tight')
+        plt.close(fig)
+    
     def generate_pdf(self, clean: bool = False) -> Path:
         if not self.correlators:
             self.run_fits()
@@ -366,6 +415,9 @@ class TwoPointReport:
             plt.tight_layout(rect=[0, 0, 1, 0.95])
             pdf.savefig(fig, bbox_inches='tight')
             plt.close(fig)
+            
+            # Page 7: Results table with all parameters
+            self._results_table(pdf)
         
         print(f"PDF saved: {output}")
         return output

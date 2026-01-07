@@ -100,5 +100,4 @@ wandb/
 
 # Data directories
 data/
-results/
 .venv/
