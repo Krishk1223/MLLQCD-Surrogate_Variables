@@ -9,3 +9,4 @@ ML models used:
 - Encoder Transformers
 
 See papers in docs/ for further details regarding project
+Please note the paper "MachineLearningForLatticeQCD.pdf" is my own written paper however, due to limitations provided by the template used (MRNAS) I do not have control over the size or placement of the images. Will export to APS format soon.
